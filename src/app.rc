@@ -1,0 +1,26 @@
+#define RT_MANIFEST 24
+1 RT_MANIFEST "app.manifest"
+2 ICON "icon.ico"
+
+1 VERSIONINFO
+FILEVERSION 1,0,0,0
+PRODUCTVERSION 1,0,0,0
+{
+  BLOCK "StringFileInfo"
+  {
+    BLOCK "040904B0"
+    {
+      VALUE "CompanyName", "Hazem Abdelghani"
+      VALUE "FileDescription", "MAME EX: a launcher for MAME (Sony ZN, Namco System 10/11/12, Konami GV/573, Taito, SNK HNG64)"
+      VALUE "FileVersion", "1.0.0"
+      VALUE "InternalName", "MAME-EX"
+      VALUE "OriginalFilename", "MAME-EX.exe"
+      VALUE "ProductName", "MAME EX"
+      VALUE "ProductVersion", "1.0.0"
+    }
+  }
+  BLOCK "VarFileInfo"
+  {
+    VALUE "Translation", 0x0409, 0x04B0
+  }
+}
