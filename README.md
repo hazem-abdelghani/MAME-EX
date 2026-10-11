@@ -1,8 +1,6 @@
 ![MAME EX](images/MAME_EX_Logo.png)
 # MAME EX
 
-<img src="images/logo.png" width="96" alt="MAME EX logo">
-
 **MAME EX** is an unofficial Windows front-end for **[MAME](https://github.com/mamedev/mame)** (not part of MAME, not made by the MAME team). It lists 462 games from the 5th-generation PlayStation-class arcade boards and starts them with MAME.
 
 - **Boards:** Sony ZN-1 / ZN-2 (including Taito FX-1A / FX-1B, Tecmo TPS and Video System games), Namco System 10 / 11 / 12, Konami GV and System 573, Taito G-NET, SNK Hyper Neo Geo 64
