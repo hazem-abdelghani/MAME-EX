@@ -72,20 +72,23 @@ static void draw_icon(Canvas *c, int icon, int variant) {
         SelectObject(c->dc, op); DeleteObject(pen);
         break;
     }
-    case TI_REFRESH: {   /* an arrow that goes round */
-        double cx = 12, cy = 12, r = 7.2, a0 = -40 * PI_ / 180, a1 = 25 * PI_ / 180, tip = -3 * PI_ / 180;
-        HPEN pen = stroke(c, 2.2, RGB(255, 255, 255)), op = (HPEN)SelectObject(c->dc, pen);
-        Arc(c->dc, PX(cx - r), PX(cy - r), PX(cx + r), PX(cy + r), PX(cx + r * cos(a0)), PX(cy + r * sin(a0)), PX(cx + r * cos(a1)), PX(cy + r * sin(a1)));
-        SelectObject(c->dc, op); DeleteObject(pen);
-        {   /* the head of the arrow at the end of the arc, pointing up the right side */
-            double bx = cx + r * cos(a1), by = cy + r * sin(a1);
-            double tx = cx + (r + 0.2) * cos(tip), ty = cy + (r + 0.2) * sin(tip) - 1.2;
-            double rx = cos(a1), ry = sin(a1);
-            pts[0] = tx; pts[1] = ty - 1.8;
-            pts[2] = bx + rx * 4.0 + 0.4; pts[3] = by + ry * 4.0 - 1.0;
-            pts[4] = bx - rx * 4.0 - 0.4; pts[5] = by - ry * 4.0 - 1.0;
-            poly(c, pts, 3, 1, 0.6);
+    case TI_REFRESH: {   /* Lucide "RefreshCw": two arcs with an arrow head each (24 x 24 grid, stroke 2, round caps) */
+        POINT p[40];
+        int n, k;
+        HPEN pen = stroke(c, 2.0, RGB(255, 255, 255)), op = (HPEN)SelectObject(c->dc, pen);
+        for (k = 0; k < 2; k++) {   /* the second half is the first one turned by 180 degrees */
+            double s = k ? -1.0 : 1.0, a, a0 = (k ? 0.0 : 180.0), a1 = (k ? 137.1 : 317.1);
+            n = 0;
+            for (a = a0; a <= a1 + 0.01 && n < 36; a += (a1 - a0) / 30.0) { p[n].x = PX(12 + 9 * cos(a * PI_ / 180)); p[n].y = PX(12 + 9 * sin(a * PI_ / 180)); n++; }
+            p[n].x = PX(12 + s * 9); p[n].y = PX(k ? 16 : 8); n++;   /* the line from the end of the arc to the arrow: (21, 8) / (3, 16) */
+            Polyline(c->dc, p, n);
+            /* the arrow head: a corner at (21, 8) / (3, 16) with the legs (21, 3) and (16, 8) / (3, 21) and (8, 16) */
+            p[0].x = PX(12 + s * 9); p[0].y = PX(k ? 21 : 3);
+            p[1].x = PX(12 + s * 9); p[1].y = PX(k ? 16 : 8);
+            p[2].x = PX(12 + s * 4); p[2].y = PX(k ? 16 : 8);
+            Polyline(c->dc, p, 3);
         }
+        SelectObject(c->dc, op); DeleteObject(pen);
         break;
     }
     case TI_FAV:     /* a star (filled when the button is switched on) */
