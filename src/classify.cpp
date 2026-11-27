@@ -43,7 +43,7 @@ const wchar_t *classify_genre(const wchar_t *title) {
         {L"kikaioh", L"Fighting"}, {L"justice gakuen", L"Fighting"}, {L"fighting", L"Fighting"},
         {L"samurai", L"Fighting"}, {L"fatal fury", L"Fighting"}, {L"buriki", L"Fighting"},
         {L"dance dance revolution", L"Music"}, {L"dancing stage", L"Music"}, {L"stepping", L"Music"}, {L"beatmania", L"Music"}, {L"guitar", L"Music"},
-        {L"drummania", L"Music"}, {L"keyboardmania", L"Music"}, {L"pop'n", L"Music"}, {L"para para", L"Music"}, {L"mambo", L"Music"}, {L"dj ", L"Music"},
+        {L"nba jam", L"Sports"}, {L"arcade jam", L"Sports"}, {L"drummania", L"Music"}, {L"keyboardmania", L"Music"}, {L"pop'n", L"Music"}, {L"para para", L"Music"}, {L"mambo", L"Music"}, {L"dj ", L"Music"},
         {L"dancemania", L"Music"}, {L"ddr", L"Music"}, {L"jam", L"Music"}, {L"percussion", L"Music"}, {L"gunmania", L"Shooter"}, {L"silent scope", L"Shooter"},
         {L"raycrisis", L"Shooter"}, {L"raystorm", L"Shooter"}, {L"ray storm", L"Shooter"}, {L"darius", L"Shooter"}, {L"shikigami", L"Shooter"}, {L"xii stag", L"Shooter"},
         {L"psyvariar", L"Shooter"}, {L"aero fighters", L"Shooter"}, {L"sonic wings", L"Shooter"}, {L"chaos heat", L"Shooter"}, {L"brave blade", L"Shooter"},
@@ -56,7 +56,7 @@ const wchar_t *classify_genre(const wchar_t *title) {
         {L"star sweep", L"Shooter"}, {L"tenkomori", L"Shooter"}, {L"shooting", L"Shooter"}, {L"flame gunner", L"Shooter"},
         {L"racer", L"Racing"}, {L"road", L"Racing"}, {L"rally", L"Racing"}, {L"racing", L"Racing"}, {L"drive", L"Racing"}, {L"kart", L"Racing"}, {L"truck", L"Racing"}, {L"rail", L"Racing"},
         {L"libero grande", L"Sports"}, {L"dunk", L"Sports"}, {L"prime goal", L"Sports"}, {L"stadium", L"Sports"}, {L"family bowl", L"Sports"},
-        {L"soccer", L"Sports"}, {L"football", L"Sports"}, {L"baseball", L"Sports"}, {L"world cup", L"Sports"},
+        {L"soccer", L"Sports"}, {L"baseball", L"Sports"}, {L"world cup", L"Sports"},
         {L"driller", L"Puzzle"}, {L"tetris", L"Puzzle"}, {L"block kuzushi", L"Puzzle"}, {L"logic pro", L"Puzzle"}, {L"puzzle", L"Puzzle"},
         {L"quiz", L"Quiz"}, {L"paca paca", L"Music"}, {L"jammer lammy", L"Music"}, {L"dancing eyes", L"Music"}, {L"quest for fame", L"Music"},
         {NULL, NULL}};

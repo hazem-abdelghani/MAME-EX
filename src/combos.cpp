@@ -9,7 +9,7 @@
 
 #define NUM_COMBOS 20
 typedef struct {
-    char name[160], kind[40], seq[160];
+    char name[160], kind[40], seq[400];
     int player;              /* 1 or 2 */
     int faceLeft;
     char key[48], pad[72];   /* trigger: the keyboard key / pad button, like the Controls tab */
@@ -52,10 +52,6 @@ static void dlg_legend(void) {
         {L"LP", L"Light Punch (Button 1)"}, {L"MP", L"Medium Punch (Button 2)"}, {L"HP", L"Heavy Punch (Button 3)"},
         {L"LK", L"Light Kick (Button 4)"}, {L"MK", L"Medium Kick (Button 5)"}, {L"HK", L"Heavy Kick (Button 6)"},
         {L"BN1 ... BN6", L"Button 1 ... 6 of the Controls tab (the same buttons as LP ... HK)"}, {L"START", L"The Start button"},
-        {L"MOTION PIECES", NULL},
-        {L"Q", L"Quarter"}, {L"H", L"Half"}, {L"C", L"Circle"}, {L"D (in front)", L"Double (twice)"},
-        {L"CF", L"Circle Forward"}, {L"CB", L"Circle Back"}, {L"R (in front)", L"Reverse"},
-        {L"DP", L"Dragon Punch motion"}, {L"FCF / FCB", L"Full Circle Forward / Back"},
         {L"MOTIONS", NULL},
         {L"QCF", L"Quarter-circle Forward  (D, DR, R)"}, {L"QCB", L"Quarter-circle Back  (D, DL, L)"},
         {L"HCF", L"Half-circle Forward  (L, DL, D, DR, R)"}, {L"HCB", L"Half-circle Back  (R, DR, D, DL, L)"},
@@ -76,7 +72,7 @@ static const char *TOKS[CMB_NTOK] = {   /* 3 rows of 10 cells, NULL = empty cell
     "L", NULL, "R", "LK", "MK", "HK", "QCB", "QCF", "+", "START",
     "DL", "D", "DR", NULL, NULL, NULL, "FCB", "FCF", ",", "Hold"};
 
-/* a button picture from the PNG files in icons (via icon_data.c), scaled to the screen DPI; NULL when the token has no picture */
+/* a button picture from the PNG files in icons (via icon_data.cpp), scaled to the screen DPI; NULL when the token has no picture */
 static HICON token_icon(const char *name) {
     int k, w, h, nw, nh, x, y;
     const IconData *ic = NULL;
@@ -337,7 +333,6 @@ static void txt8(const char *s, wchar_t *out, int cap) {
     out[cap - 1] = 0;
     free(w);
 }
-static void dash8(const char *s, wchar_t *out, int cap) { if (!s[0]) wcscpy(out, L"-"); else txt8(s, out, cap); }
 
 
 /* ---------------------------------------------------------------- the move lists */
@@ -423,8 +418,11 @@ static int g_cfgLoaded;
 static void cmb_show(void) {   /* the values of g_in into the controls */
     if (g_cmb.lv) {
         CmbUI *u = &g_cmb;
+        int keep = u->syncing;
+        u->syncing = 1;   /* the EN_CHANGE of the boxes must not read the old text back into g_in */
         edit_set_int(u->eChg, g_in.chargeMs);
         edit_set_int(u->eStep, g_in.stepMs);
+        u->syncing = keep;
         cmb_refresh();
         fill_form();
     }
@@ -609,7 +607,7 @@ void cmb_cell(int row, int col) {
     if (row < 0 || row >= g_rows || col < 6 || col > 7) return;
     s = &g_in.slots[row];
     swprintf(label, 60, L"Combo %d Trigger", row + 1);
-    if (col == 6) { int cl = 0; capture_key_token(ui_owner(g_main), label, s->key, &cl); }
+    if (col == 6) capture_key_token(ui_owner(g_main), label, s->key);
     else capture_pad_token(ui_owner(g_main), label, 0, s->pad);
     cmb_refresh();
 }
@@ -710,9 +708,9 @@ int cmb_command(int id, int code) {
     CmbUI *u = &g_cmb;
     ComboSlot *s;
     if (id == ID_K_LEGEND) { if (code == BN_CLICKED) dlg_legend(); return 1; }
-    if (id == ID_K_HOW) { if (code == BN_CLICKED) msg_box(g_main, L"How Combos Work", INFO, MB_ICONINFORMATION, NULL); return 1; }
+    if (id == ID_K_HOW) { if (code == BN_CLICKED) msg_box(ui_owner(g_main), L"How Combos Work", INFO, MB_ICONINFORMATION, NULL); return 1; }
     if (id >= ID_K_TOK && id < ID_K_TOK + CMB_NTOK) { if (code == BN_CLICKED) token_click(id - ID_K_TOK); return 1; }
-    if (id == ID_K_STEP || id == ID_K_CHG) { if (code == EN_CHANGE) cmb_collect(); return 1; }
+    if (id == ID_K_STEP || id == ID_K_CHG) { if (code == EN_CHANGE && !g_cmb.syncing) cmb_collect(); return 1; }
     if (id == ID_K_LOADCHAR && code == CBN_SELCHANGE) { load_character(); return 1; }
     if (id == ID_K_CHAR && code == CBN_SELCHANGE) {
         if (!u->syncing && SendMessageW(u->cbChar, CB_GETCURSEL, 0, 0) >= 0) show_char((int)SendMessageW(u->cbChar, CB_GETCURSEL, 0, 0));
@@ -745,8 +743,7 @@ int cmb_command(int id, int code) {
             s->seq[sizeof s->seq - 1] = 0;
         }
         set_note(NULL);
-        strcpy(s->name, "Custom");
-        strcpy(s->kind, "Custom");
+        if (strcmp(s->kind, "Custom")) { strcpy(s->name, "Custom"); strcpy(s->kind, "Custom"); }   /* a move of a list becomes a custom one; a custom row keeps the name it was given */
         u->syncing = 1;
         SendMessageW(u->cbMove, CB_SETCURSEL, (WPARAM)-1, 0);
         u->syncing = 0;
@@ -996,7 +993,6 @@ static int parse_button(const char *t, int len) {   /* 0..5 = Button 1..6, 6 = S
     return -1;
 }
 
-typedef struct { unsigned mask; int ms; } Step;   /* mask: bit0 up, 1 down, 2 left, 3 right, 4..9 button 1..6, 10 start; ms 0 = the step length */
 
 static void add_step(std::string &out, int &n, unsigned *lastMask, unsigned mask, int ms) {
     char t[40];
@@ -1064,7 +1060,7 @@ static const char *LUA_BODY =
 "    local n = 0\n"
 "    for tag, port in pairs(manager.machine.ioport.ports) do\n"
 "      for key, f in pairs(port.fields) do\n"
-"        local nm = f.name or key\n"
+"        local nm = f.default_name or f.name or key   -- the default name of the port type (P1 Button 1) even where the game names its buttons itself (Jab Punch ...)\n"
 "        local pl, what = nm:match('^P(%d) (.+)$')\n"
 "        pl = tonumber(pl)\n"
 "        if pl == 1 or pl == 2 then\n"
@@ -1197,7 +1193,7 @@ int combos_plugin_prepare(wchar_t *pluginsPath, size_t cap) {
     path_join(f, 560, sub, L"init.lua");
     if (!write_file(f, lua.c_str(), lua.size())) return 0;
     {
-        const char *js = "{\n\t\"plugin\": {\n\t\t\"name\": \"mamex_combos\",\n\t\t\"description\": \"MAME EX combos\",\n\t\t\"version\": \"1.0.0\",\n\t\t\"author\": \"MAME EX\",\n\t\t\"type\": \"plugin\",\n\t\t\"start\": \"false\"\n\t}\n}\n";
+        const char *js = "{\n\t\"plugin\": {\n\t\t\"name\": \"mamex_combos\",\n\t\t\"description\": \"MAME EX combos\",\n\t\t\"version\": \"1.1.0\",\n\t\t\"author\": \"MAME EX\",\n\t\t\"type\": \"plugin\",\n\t\t\"start\": \"false\"\n\t}\n}\n";
         path_join(f, 560, sub, L"plugin.json");
         if (!write_file(f, js, strlen(js))) return 0;
     }

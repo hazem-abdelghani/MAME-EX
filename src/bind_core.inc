@@ -63,7 +63,12 @@ static void af_read(void) {
         if (f.size() < 4) continue;
         for (i = 0; i < NBIND; i++) {
             if (f[0] != kRows[i].token || !bind_is_button(i)) continue;
-            if (!g_b[i].custom || g_b[i].key[0] || g_b[i].pad[0] || g_b[i].extra[0]) continue;   /* the row is not NONE any more: changed outside the launcher */
+            if (!g_b[i].custom) { memset(&g_b[i], 0, sizeof g_b[i]); g_b[i].custom = 1; }   /* the row is not in default.cfg (deleted or rewritten by MAME): the codes of the file give it back */
+            {   /* the row is NONE (the plugin presses the button), or it has the real codes of the file (a start without the plugin wrote them back); other codes: changed outside the launcher */
+                int none = !g_b[i].key[0] && !g_b[i].pad[0] && !g_b[i].extra[0];
+                int same = f[1] == g_b[i].key && f[2] == g_b[i].pad && f[3] == g_b[i].extra;
+                if (!none && !same) continue;
+            }
             strncpy(g_b[i].key, f[1].c_str(), sizeof g_b[i].key - 1);
             strncpy(g_b[i].pad, f[2].c_str(), sizeof g_b[i].pad - 1);
             strncpy(g_b[i].extra, f[3].c_str(), sizeof g_b[i].extra - 1);
@@ -74,7 +79,6 @@ static void af_read(void) {
 static int g_dirty;
 
 const wchar_t *bind_label(int row) { return kRows[row].label; }
-int bind_dirty(void) { return g_dirty; }
 
 /* ---------------------------------------------------------------- default.cfg */
 static void cfg_file(wchar_t *out, size_t cap) {
@@ -128,9 +132,14 @@ static int find_port(const std::string &t, const char *token, size_t *from, size
     std::string key = std::string("<port type=\"") + token + "\"";
     size_t a = t.find(key), e;
     if (a == std::string::npos) return 0;
+    {   /* <port type="X"/> (self-closed): only this tag goes */
+        size_t gt = t.find('>', a);
+        if (gt != std::string::npos && gt > 0 && t[gt - 1] == '/') { *to = gt + 1; goto have_end; }
+    }
     e = t.find("</port>", a);
     if (e == std::string::npos) return 0;
     *to = e + 7;
+have_end:
     while (a > 0 && (t[a - 1] == ' ' || t[a - 1] == '\t')) a--;
     *from = a;
     return 1;
@@ -163,19 +172,26 @@ void bind_load(void) {
     af_read();
 }
 
+/* the codes go into an XML file (and a profile or the autofire file can be edited by hand): only the characters of MAME's codes are written */
+static std::string xml_safe(const char *s) {
+    std::string o;
+    for (; *s; s++) if ((*s >= 'A' && *s <= 'Z') || (*s >= 'a' && *s <= 'z') || (*s >= '0' && *s <= '9') || *s == '_' || *s == ' ' || *s == '-' || *s == '.') o += *s;
+    return o;
+}
+void bind_backup_cfg(void);
 static int g_afNative;   /* 1: the autofire rows are written with their real codes (no plugin will press them) */
 static std::string make_port(int i) {
     const Bind *b = &g_b[i];
     std::string seq;
     if (b->autofire && bind_is_button(i) && !g_afNative) return std::string("            <port type=\"") + kRows[i].token + "\">\n                <newseq type=\"standard\">\n                    NONE\n                </newseq>\n            </port>\n";   /* the plugin presses it */
-    if (b->key[0]) seq += std::string("KEYCODE_") + b->key;
-    if (b->pad[0]) { if (!seq.empty()) seq += " OR "; seq += std::string("JOYCODE_") + b->pad; }
-    if (b->extra[0]) { if (!seq.empty()) seq += " OR "; seq += b->extra; }
+    if (b->key[0]) seq += std::string("KEYCODE_") + xml_safe(b->key);
+    if (b->pad[0]) { if (!seq.empty()) seq += " OR "; seq += std::string("JOYCODE_") + xml_safe(b->pad); }
+    if (b->extra[0]) { if (!seq.empty()) seq += " OR "; seq += xml_safe(b->extra); }
     if (seq.empty()) seq = "NONE";
     return std::string("            <port type=\"") + kRows[i].token + "\">\n                <newseq type=\"standard\">\n                    " + seq + "\n                </newseq>\n            </port>\n";
 }
 
-int bind_save(void);
+static int bind_save_impl(int onlyAf);
 /* at the start of a game: with the plugin the autofire buttons are NONE in MAME's file (the plugin presses them), without it (the filter is off for the
    game, or the plugin could not be written) they get their real keys back, so the button at least works, without the repeat */
 int bind_autofire_mode(int pluginRuns) {
@@ -183,27 +199,31 @@ int bind_autofire_mode(int pluginRuns) {
     for (i = 0; i < NBIND; i++) if (g_b[i].custom && g_b[i].autofire && bind_is_button(i)) any = 1;
     if (!any) return 1;
     g_afNative = !pluginRuns;
-    g_dirty = 1;
-    r = bind_save();
+    r = bind_save_impl(1);   /* only the ports of the autofire buttons: edits of the other rows that are not confirmed with OK stay out of the file */
     g_afNative = 0;
     return r;
 }
 
-int bind_save(void) {
+int bind_save(void) { return bind_save_impl(0); }
+
+static int bind_save_impl(int onlyAf) {
     wchar_t p[700], dir[700];
     char *txt;
     std::string t, add, res;
     int i, any = 0;
     size_t pos;
-    if (!g_dirty) return 1;
-    af_write();
+    if (!onlyAf && !g_dirty) return 1;
+    { wchar_t ex[560]; if (!mame_exe(ex, 560)) return 1; }   /* no MAME yet: nothing is written (not next to the launcher); the rows stay changed in memory until a MAME is chosen */
+    if (!onlyAf) af_write();
     cfg_file(p, 700);
     wcscpy(dir, p);
     { wchar_t *s = wcsrchr(dir, L'\\'); if (s) { *s = 0; CreateDirectoryW(dir, NULL); } }
     txt = read_file(p, NULL);
     if (txt) { t = txt; free(txt); }
+    else if (file_exists(p)) return 0;   /* the file is there but cannot be read (MAME has it open?): it is not replaced by a new one that would lose the other settings in it */
     for (i = 0; i < NBIND; i++) {   /* the old entries of our ports go; the rest of the file stays */
         size_t a, e;
+        if (onlyAf && !(g_b[i].custom && g_b[i].autofire && bind_is_button(i))) continue;
         while (find_port(t, kRows[i].token, &a, &e)) {
             if (e < t.size() && t[e] == '\r') e++;
             if (e < t.size() && t[e] == '\n') e++;
@@ -213,12 +233,13 @@ int bind_save(void) {
     }
     if (t.empty() || t.find("<mameconfig") == std::string::npos) {   /* no file (or none we know): a new one */
         if (!any) return 1;
+        if (!t.empty()) bind_backup_cfg();   /* a file that is not a MAME cfg is kept once as default.cfg.mame-ex-backup */
         res = "<?xml version=\"1.0\"?>\n<mameconfig version=\"10\">\n    <system name=\"default\">\n        <input>\n" + add + "        </input>\n    </system>\n</mameconfig>\n";
     } else {
         size_t sys = t.find("<system name=\"default\">"), in, inEnd;
         res = t;
         if (sys == std::string::npos) {   /* a file without the default system: ours is added */
-            if (!any) { g_dirty = 0; return 1; }
+            if (!any) { if (!onlyAf) g_dirty = 0; return 1; }
             pos = res.rfind("</mameconfig>");
             if (pos == std::string::npos) return 0;
             res.insert(pos, "    <system name=\"default\">\n        <input>\n" + add + "        </input>\n    </system>\n");
@@ -232,13 +253,13 @@ int bind_save(void) {
                 res.insert(pos, add);
             } else {
                 if (inEnd == std::string::npos) return 0;
-                if (!any) { g_dirty = 0; return 1; }
+                if (!any) { if (!onlyAf) g_dirty = 0; return 1; }
                 res.insert(inEnd, "        <input>\n" + add + "        </input>\n    ");
             }
         }
     }
     if (!write_file(p, res.data(), res.size())) return 0;
-    g_dirty = 0;
+    if (!onlyAf) g_dirty = 0;
     return 1;
 }
 
@@ -268,8 +289,10 @@ static void bind_pad_store(Bind *b, const std::vector<std::string> &codes) {
     b->pad[0] = 0;
     for (i = 0; i < codes.size(); i++) {
         if (i == 0) { strncpy(b->pad, codes[i].c_str(), sizeof b->pad - 1); continue; }
-        if (!keep.empty()) keep += " OR ";
-        keep += "JOYCODE_" + codes[i];
+        {   /* a code that does not fit is left out whole (never cut in the middle) */
+            std::string add = (keep.empty() ? "" : " OR ") + std::string("JOYCODE_") + codes[i];
+            if (keep.size() + add.size() < sizeof b->extra) keep += add;
+        }
     }
     strncpy(b->extra, keep.c_str(), sizeof b->extra - 1);
     b->extra[sizeof b->extra - 1] = 0;

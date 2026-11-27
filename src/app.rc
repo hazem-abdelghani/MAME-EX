@@ -3,8 +3,8 @@
 2 ICON "icon.ico"
 
 1 VERSIONINFO
-FILEVERSION 1,0,0,0
-PRODUCTVERSION 1,0,0,0
+FILEVERSION 1,1,0,0
+PRODUCTVERSION 1,1,0,0
 {
   BLOCK "StringFileInfo"
   {
@@ -12,11 +12,11 @@ PRODUCTVERSION 1,0,0,0
     {
       VALUE "CompanyName", "Hazem Abdelghani"
       VALUE "FileDescription", "MAME EX: a launcher for MAME (Sony ZN, Namco System 10/11/12, Konami GV/573, Taito, SNK HNG64)"
-      VALUE "FileVersion", "1.0.0"
+      VALUE "FileVersion", "1.1.0"
       VALUE "InternalName", "MAME-EX"
       VALUE "OriginalFilename", "MAME-EX.exe"
       VALUE "ProductName", "MAME EX"
-      VALUE "ProductVersion", "1.0.0"
+      VALUE "ProductVersion", "1.1.0"
     }
   }
   BLOCK "VarFileInfo"

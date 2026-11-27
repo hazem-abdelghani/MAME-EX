@@ -1,4 +1,4 @@
-/* What MAME calls the controls of the pads on this PC: a short MAME run (-video none, the game pong, one second) with a small Lua plugin that
+/* What MAME calls the controls of the pads on this PC: a short MAME run (-video none, the game pong, two seconds) with a small Lua plugin that
    writes the joystick devices and their items (name, token, value at rest) to mame-ex-padprobe.txt. The pad capture uses it to write the codes
    MAME itself uses (the buttons A / B / X / Y, the D-pad, LT / RT ...), whatever the version of MAME, instead of guessing them. */
 #include "common.h"
@@ -71,16 +71,16 @@ static void parse_probe(const char *txt) {
     }
 }
 
-void padprobe_run(int force) {
+void padprobe_run(void) {
     wchar_t exe[560], dir[560], sub[560], f[560], outp[560], fin[560], mdir[560], *cl;
     std::string lua, outu;
     char *u8;
     ArgList a = {0};
     STARTUPINFOW si;
     PROCESS_INFORMATION pi;
-    if (g_probed && !force) return;
+    if (g_probed) return;
     g_probed = 1;
-    g_cacheTried = 1;
+    load_cache();   /* an earlier good result stays in use when this run fails */
     if (!mame_exe(exe, 560)) return;
     mame_dir(mdir, 560);
     plugin_path(dir, 560, L"mame-ex-probe-plugin");
@@ -251,6 +251,13 @@ int diag_plugin_prepare(wchar_t *dirOut, size_t cap) {
     wcsncpy(dirOut, dir, cap - 1);
     dirOut[cap - 1] = 0;
     return 1;
+}
+
+/* 1 when the probe lists the device number devno (0: nothing is known about it) */
+int padprobe_device_known(int devno) {
+    load_cache();
+    for (size_t i = 0; i < g_pdev.size(); i++) if (g_pdev[i].index + 1 == devno) return 1;
+    return 0;
 }
 
 /* 1 when the device number devno is an XInput pad, or nothing is known about it; 0 for a DirectInput / other device */

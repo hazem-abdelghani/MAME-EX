@@ -238,9 +238,9 @@ int zip_entries(const unsigned char *buf, size_t len, ZipEntry *out, int max) {
 /* where the data of an entry starts (after its local header); 0 when the header is wrong */
 static size_t data_start(const unsigned char *buf, size_t len, const ZipEntry *e) {
     size_t o = e->offset;
-    if (o + 30 > len || rd32(buf + o) != 0x04034b50UL) return 0;
+    if (o > len || len - o < 30 || rd32(buf + o) != 0x04034b50UL) return 0;
     o += 30 + rd16(buf + o + 26) + rd16(buf + o + 28);
-    if (o > len || o + e->csize > len) return 0;
+    if (o > len || (size_t)e->csize > len - o) return 0;   /* (written so that it cannot wrap on a 32-bit size_t) */
     return o;
 }
 
@@ -265,7 +265,7 @@ static void problem(ZipReport *r, const char *fmt, const char *name) {
 
 int zip_verify(const unsigned char *buf, size_t len, ZipReport *rep) {
     ZipEntry *ents;
-    int n, i, cap = 4096;
+    int n, i, cap = ZIP_MAXENT;
     memset(rep, 0, sizeof *rep);
     if (len < 22) { problem(rep, "%s", "the file is too small to be a zip"); return 0; }
     ents = (ZipEntry *)malloc(sizeof(ZipEntry) * (size_t)cap);
@@ -284,7 +284,8 @@ int zip_verify(const unsigned char *buf, size_t len, ZipReport *rep) {
         o = data_start(buf, len, e);
         if (!o) { problem(rep, "%s: its data is missing (the zip is cut off or damaged)", e->name); continue; }
         if (e->method == 0) {
-            if (zip_crc32(0, buf + o, e->usize) != e->crc) problem(rep, "%s: wrong checksum (the file is corrupt)", e->name);
+            if (e->usize != e->csize) problem(rep, "%s: has the wrong size (the file is corrupt)", e->name);
+            else if (zip_crc32(0, buf + o, e->usize) != e->crc) problem(rep, "%s: wrong checksum (the file is corrupt)", e->name);
         } else if (e->method == 8) {
             if (inflate_raw(buf + o, e->csize, NULL, 0, &crc, &got) != 0) problem(rep, "%s: cannot be unpacked (the file is corrupt)", e->name);
             else if (got != e->usize) problem(rep, "%s: has the wrong size (the file is corrupt)", e->name);
@@ -322,14 +323,14 @@ int zw_add(ZipWriter *w, const char *name, const void *data, size_t n) {
     if (!grow(&w->data, &w->cap, at + 30 + nl + n) || !grow(&w->dir, &w->dcap, w->dn + 46 + nl)) return 0;
     h = w->data + at;
     memset(h, 0, 30);
-    w32(h, 0x04034b50UL); w16(h + 4, 10); w16(h + 10, 0); w16(h + 12, 0x21);   /* stored, 1980-01-01 */
+    w32(h, 0x04034b50UL); w16(h + 4, 10); w16(h + 6, 0x0800); w16(h + 10, 0);   /* bit 11: the names are UTF-8 */ w16(h + 12, 0x21);   /* stored, 1980-01-01 */
     w32(h + 14, crc); w32(h + 18, n); w32(h + 22, n); w16(h + 26, (unsigned)nl);
     memcpy(h + 30, name, nl);
     if (n) memcpy(h + 30 + nl, data, n);
     w->n = at + 30 + nl + n;
     d = w->dir + w->dn;
     memset(d, 0, 46);
-    w32(d, 0x02014b50UL); w16(d + 4, 20); w16(d + 6, 10); w16(d + 14, 0x21);
+    w32(d, 0x02014b50UL); w16(d + 4, 20); w16(d + 6, 10); w16(d + 8, 0x0800); w16(d + 14, 0x21);
     w32(d + 16, crc); w32(d + 20, n); w32(d + 24, n); w16(d + 28, (unsigned)nl); w32(d + 42, at);
     memcpy(d + 46, name, nl);
     w->dn += 46 + nl;

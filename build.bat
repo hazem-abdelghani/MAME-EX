@@ -5,8 +5,8 @@ setlocal
 cd /d "%~dp0src"
 if "%ZIG%"=="" set ZIG=python -m ziglang
 set SRC=main.cpp ui.cpp util.cpp settings.cpp games.cpp mame.cpp gamecfg.cpp filter.cpp bindings.cpp profiles.cpp padprobe.cpp hlsl.cpp moreopts.cpp gameextra.cpp combos.cpp combo_data.cpp icon_data.cpp tips.cpp zipio.cpp romcheck.cpp classify.cpp backup.cpp theme.cpp toolbar.cpp
-set LIBS=-luser32 -lgdi32 -lcomctl32 -lcomdlg32 -lshell32 -lole32 -luuid -luxtheme -lwinmm -ladvapi32
-set FLAGS=-std=c++17 -Os -s -municode -Wl,--subsystem,windows -Wall -Wno-unused -Wno-parentheses -Wno-nullability-completeness
+set LIBS=-luser32 -lgdi32 -lcomctl32 -lcomdlg32 -lshell32 -lole32 -luuid -luxtheme -lwinmm -ladvapi32 -ld3d11 -ldxgi -ldxguid
+set FLAGS=-std=c++17 -Os -s -municode -Wl,--subsystem,windows -Wall -Wno-parentheses -Wno-nullability-completeness
 %ZIG% rc /fo app.res app.rc || goto :fail
 %ZIG% c++ -target x86_64-windows-gnu %FLAGS% -o ..\MAME-EX.exe %SRC% app.res %LIBS% || goto :fail
 %ZIG% c++ -target x86-windows-gnu %FLAGS% -o ..\MAME-EX-32bit.exe %SRC% app.res %LIBS% || goto :fail
@@ -15,6 +15,7 @@ echo.
 echo Done: MAME-EX.exe and MAME-EX-32bit.exe
 exit /b 0
 :fail
+if exist app.res del app.res
 echo.
 echo Build failed.
 exit /b 1

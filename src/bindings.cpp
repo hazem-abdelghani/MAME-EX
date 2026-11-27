@@ -131,7 +131,7 @@ void bind_text(int row, wchar_t *key, wchar_t *pad, size_t cap) {
 }
 
 /* ---------------------------------------------------------------- capture: a key */
-typedef struct { BOOL was[256]; int row, changed; char out[48]; } KeyCtx;
+typedef struct { BOOL was[256]; int changed; char out[48]; } KeyCtx;
 
 static void key_timer(Modal *md) {
     KeyCtx *c = (KeyCtx *)md->user;
@@ -157,7 +157,7 @@ static void key_timer(Modal *md) {
     }
 }
 
-int capture_key_token(HWND owner, const wchar_t *label, char *out48, int *cleared) {
+int capture_key_token(HWND owner, const wchar_t *label, char *out48) {
     Modal md;
     KeyCtx c;
     wchar_t text[300];
@@ -180,8 +180,7 @@ int capture_key_token(HWND owner, const wchar_t *label, char *out48, int *cleare
 
 int bind_capture_key(HWND owner, int row) {
     char k[48];
-    int cl = 0;
-    if (!capture_key_token(owner, kRows[row].label, k, &cl)) return 0;
+    if (!capture_key_token(owner, kRows[row].label, k)) return 0;
     bind_set_key(row, k);
     return 1;
 }
@@ -197,9 +196,9 @@ typedef struct {
     WORD prevX[4];
     BYTE prevT[4][2];   /* triggers (LT, RT) held at the last look */
     DWORD prevJ[16];
-    int dir, row, changed, startTick;
+    int dir, changed;
     int devno[4];   /* the MAME device number (JOYCODE_n) of each XInput pad, 0 = unknown */
-    HWND cbCtl, lbl;
+    HWND cbCtl;
     char out[80];
 } PadCtx;
 
@@ -309,10 +308,10 @@ static void pad_timer(Modal *md) {
         if (c->dir) {
             int d;
             for (d = 0; d < 4; d++) if (newly & dirs[d]) { pad_done(md, c, i + 1, dir_name(dirs[d], 0)); return; }
-            if (newly & (1 << 24)) { pad_done(md, c, c->devno[i] ? c->devno[i] : i + 1, dir_name(D_UP, 1)); return; }
-            if (newly & (1 << 25)) { pad_done(md, c, c->devno[i] ? c->devno[i] : i + 1, dir_name(D_DOWN, 1)); return; }
-            if (newly & (1 << 26)) { pad_done(md, c, c->devno[i] ? c->devno[i] : i + 1, dir_name(D_LEFT, 1)); return; }
-            if (newly & (1 << 27)) { pad_done(md, c, c->devno[i] ? c->devno[i] : i + 1, dir_name(D_RIGHT, 1)); return; }
+            if (newly & (1 << 24)) { pad_done(md, c, i + 1, dir_name(D_UP, 1)); return; }
+            if (newly & (1 << 25)) { pad_done(md, c, i + 1, dir_name(D_DOWN, 1)); return; }
+            if (newly & (1 << 26)) { pad_done(md, c, i + 1, dir_name(D_LEFT, 1)); return; }
+            if (newly & (1 << 27)) { pad_done(md, c, i + 1, dir_name(D_RIGHT, 1)); return; }
         } else {
             int k;
             char what[24];
@@ -337,9 +336,9 @@ int capture_pad_token(HWND owner, const wchar_t *label, int dir, char *out72) {
     c.dir = dir;
     c.xi = LoadLibraryW(L"xinput1_4.dll");
     if (!c.xi) c.xi = LoadLibraryW(L"xinput1_3.dll");
-if (c.xi) c.xget = (PFN_XGET)GetProcAddress(c.xi, "XInputGetState");
+    if (c.xi) c.xget = (PFN_XGET)GetProcAddress(c.xi, "XInputGetState");
     if (c.xget) {   /* what MAME calls the controls of the pads (a short MAME run, once) */
-        padprobe_run(0);
+        padprobe_run();
         for (i = 0; i < 4; i++) c.devno[i] = padprobe_devno(i + 1);
     }
     md.kind = 8; md.owner = owner; md.user = &c; md.ontimer = pad_timer; md.oncmd = pad_cmd;

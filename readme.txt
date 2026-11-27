@@ -1,9 +1,12 @@
-MAME EX
-=======
+MAME EX v1.1.0
+==============
 
 MAME EX is an unofficial Windows front-end for MAME (not part of MAME, not
 made by the MAME team). It lists 462 games from the 5th-generation
 PlayStation-class arcade boards and starts them with MAME.
+
+Based on the ZiNc EX launcher by Hazem Abdelghani:
+https://github.com/hazem-abdelghani/ZiNc-EX
 
 Boards
 ------
@@ -19,7 +22,7 @@ Package
 
 Requirements
 ------------
-  - Windows 10 or newer (the Filter Window needs Windows 8.1 or newer)
+  - Windows 10 or newer
   - a current mame.exe (any recent MAME with Lua plugin support, as in the
     official builds)
   - the ROM sets (zip files), the BIOS set of the board (for example
@@ -41,7 +44,9 @@ line, so a game started from the launcher has exactly the settings you see.
 Main features
 -------------
   Game list      Search, favorites, region / maker / genre filters, sortable
-                 and hideable columns, recent games, light / dark theme.
+                 and hideable columns, recent games, light / dark theme,
+                 window size and maximized state remembered. Ctrl+Enter
+                 starts the selected game from anywhere.
   Per-game       Video mode, window, resolution, rotation, sound, cheats,
   settings       BIOS, DIP switches, extra arguments.
   Video          Video mode (BGFX / Direct3D / OpenGL / GDI), HLSL Settings
@@ -76,7 +81,8 @@ Frontend command line
   MAME-EX.exe --game <set name or ROM zip> [--fullscreen | --windowed]
 
   The call waits until MAME is closed. Exit codes: 0 played, 2 unknown game,
-  3 ROM files missing, 4 mame.exe could not be started, 5 no game given.
+  3 ROM files missing, 4 mame.exe could not be started, 5 no game given,
+  6 MAME ended with an error.
   Use it with LaunchBox, Pegasus, RetroBat, Playnite, Steam ROM Manager or
   Attract-Mode.
 
@@ -88,6 +94,7 @@ Files the launcher creates (next to MAME-EX.exe)
   mame-ex-autofire.cfg        autofire rows
   mame-ex-listing-cache.cfg   which sets the installed MAME knows
   mame-ex-padprobe.txt        names of your pad's controls, asked from MAME
+  MAME-EX-before-restore.zip  a copy of your files, made by File > Restore Settings
   profiles\                   saved key / pad mappings
   mame-ex-plugins\            the Lua plugins written for MAME (combos /
                               autofire, pad probe, input log); safe to delete
@@ -105,7 +112,7 @@ Notes
   - Only one launcher runs per folder.
   - Autofire needs the launcher's Lua plugin. Without it the autofire buttons
     work as normal buttons, without the repeat.
-  - The Filter Window (xBRZ / FXAA, experimental) copies the picture of the
+  - The Filter Window (xBRZ / FXAA) copies the picture of the
     MAME window: do not use MAME's own fullscreen (Alt+Enter) with it.
   - An internal resolution above the console's own cannot be offered: MAME
     draws these games with a software GPU at the console's resolution.
@@ -114,8 +121,9 @@ Troubleshooting
 ---------------
   - "mame.exe was not found": choose it on the General tab (MAME Program), or
     put the launcher next to mame.exe.
-  - A game is marked red / cannot start: a ROM or BIOS zip is missing. Use
-    Game > Check ROM Set to see which file.
+  - A game has a red cross in the Status column / cannot start: a ROM or BIOS
+    zip is missing, or the installed MAME does not know the set (the status bar says
+    which). Use Game > Check ROM Set to see which file.
   - A key or pad button does nothing: turn on Enable Logs (General tab), start
     the game once, and look at logs\mame-ex-input.log and
     logs\mame-ex-launch.log.

@@ -10,15 +10,25 @@ HWND g_main;
 
 int S(int px) { return MulDiv(px, g_dpi, 96); }
 
-void wide_from_ascii(const char *s, wchar_t *out, int cap) {
-    int i = 0;
-    while (s[i] && i < cap - 1) { out[i] = (unsigned char)s[i]; i++; }
-    out[i] = 0;
-}
-
 HWND mk(HWND parent, const wchar_t *cls, const wchar_t *text, DWORD style, DWORD ex, int id) {
-    HWND h = CreateWindowExW(ex, cls, text, style | WS_CHILD | WS_VISIBLE, 0, 0, 10, 10, parent, (HMENU)(INT_PTR)id, g_inst, NULL);
-    if (h) { SendMessageW(h, WM_SETFONT, (WPARAM)g_font, TRUE); th_control(h, cls); }
+    int combo = g_dark && !_wcsicmp(cls, L"COMBOBOX") && (style & 0xF) == CBS_DROPDOWNLIST;
+    HWND h;
+    if (combo) style |= CBS_OWNERDRAWFIXED | CBS_HASSTRINGS;   /* dark theme: the items are drawn by th_combo_draw (white text on the highlight) */
+    h = CreateWindowExW(ex, cls, text, style | WS_CHILD | WS_VISIBLE, 0, 0, 10, 10, parent, (HMENU)(INT_PTR)id, g_inst, NULL);
+    if (h) {
+        SendMessageW(h, WM_SETFONT, (WPARAM)g_font, TRUE);
+        if (combo) {
+            HDC dc = GetDC(h);
+            TEXTMETRICW tm;
+            HGDIOBJ old = SelectObject(dc, g_font);
+            GetTextMetricsW(dc, &tm);
+            SelectObject(dc, old);
+            ReleaseDC(h, dc);
+            SendMessageW(h, CB_SETITEMHEIGHT, (WPARAM)-1, tm.tmHeight + S(4));   /* the closed box */
+            SendMessageW(h, CB_SETITEMHEIGHT, 0, tm.tmHeight + S(5));           /* the items of the list */
+        }
+        th_control(h, cls);
+    }
     return h;
 }
 
@@ -228,7 +238,7 @@ static LRESULT CALLBACK modal_proc(HWND h, UINT m, WPARAM w, LPARAM l) {
     case WM_CTLCOLOREDIT: case WM_CTLCOLORBTN: case WM_CTLCOLORLISTBOX:
         if (g_dark) return (LRESULT)th_ctlcolor(m, (HDC)w, (HWND)l, 0);
         break;
-    case WM_APP + 10:   /* the ROM check is done (romcheck.c): the text of the report */
+    case WM_RC_DONE:   /* the ROM check is done (romcheck.cpp): the text of the report */
         if (md && md->kind == 7) { SetWindowTextW(md->c1, (const wchar_t *)l); free((void *)l); return 0; }
         break;
     case WM_CLOSE:
@@ -266,7 +276,7 @@ HWND make_modal(Modal *md, int cw, int ch) {
     GetWindowRect(md->owner, &ow);
     x = ow.left + ((ow.right - ow.left) - w) / 2;
     y = ow.top + ((ow.bottom - ow.top) - h) / 2;
-    md->dlg = CreateWindowExW(WS_EX_DLGMODALFRAME, L"ZModal", md->title, style, x, y, w, h, md->owner, NULL, g_inst, NULL);
+    md->dlg = CreateWindowExW(WS_EX_DLGMODALFRAME, L"MameExModal", md->title, style, x, y, w, h, md->owner, NULL, g_inst, NULL);
     SetWindowLongPtrW(md->dlg, GWLP_USERDATA, (LONG_PTR)md);
     SendMessageW(md->dlg, WM_SETFONT, (WPARAM)g_font, 0);
     if (g_icon) { SendMessageW(md->dlg, WM_SETICON, ICON_BIG, (LPARAM)g_icon); SendMessageW(md->dlg, WM_SETICON, ICON_SMALL, (LPARAM)g_iconSm); }
@@ -354,6 +364,12 @@ void dlg_table(HWND owner, const wchar_t *title, const wchar_t *c0, const wchar_
     HWND lv;
     LVCOLUMNW col;
     int i, cw = w0 + w1 + 28 + 20, ch = 520;
+    {   /* not taller than the screen (a small screen with a large text size) */
+        RECT wa;
+        SystemParametersInfoW(SPI_GETWORKAREA, 0, &wa, 0);
+        int avail = MulDiv(wa.bottom - wa.top, 96, g_dpi) - 90;
+        if (ch > avail) ch = avail > 260 ? avail : 260;
+    }
     memset(&md, 0, sizeof md);
     md.kind = 9; md.owner = owner;
     wcsncpy(md.title, title, 119);
@@ -404,7 +420,7 @@ void ui_init(HINSTANCE inst) {
     wc.hInstance = inst;
     wc.hCursor = LoadCursorW(NULL, IDC_ARROW);
     wc.hbrBackground = th_face_brush();
-    wc.lpszClassName = L"ZModal";
+    wc.lpszClassName = L"MameExModal";
     wc.hIcon = g_icon;
     RegisterClassW(&wc);
 }

@@ -1,11 +1,10 @@
-/* The filter window (experimental): xBRZ, FXAA, dither smoothing and better scalers for MAME.
+/* The filter window: xBRZ, FXAA, dither smoothing and better scalers for MAME.
    MAME runs in a window of the game's own picture size; this window copies the picture of the MAME window every frame, runs the pixel shaders of the
    Direct3D 11 renderer of ZiNc EX over it (the xBRZ, FXAA and dither smoothing HLSL is taken from there) and shows the result on top, over the whole
    screen. The window is click-through and never takes the focus, so the keyboard and the mouse still go to MAME. It is shown only while MAME has the focus. */
 #include "common.h"
 #include <d3d11.h>
 #include <string>
-#include <algorithm>
 
 typedef HRESULT (WINAPI *PFN_COMPILE)(LPCVOID, SIZE_T, LPCSTR, const D3D_SHADER_MACRO *, ID3DInclude *, LPCSTR, LPCSTR, UINT, UINT, ID3DBlob **, ID3DBlob **);
 
@@ -115,8 +114,6 @@ typedef struct { float params[4], region[4], xs[4], ss[4], rect[4]; } CB;
 
 static HANDLE g_thread;
 static volatile LONG g_stop;
-static DWORD g_pid;
-static int g_running;
 
 typedef struct { DWORD pid; HWND found; } FindCtx;
 static BOOL CALLBACK find_proc(HWND h, LPARAM lp) {
@@ -156,10 +153,10 @@ static LRESULT CALLBACK out_proc(HWND h, UINT m, WPARAM w, LPARAM l) {
 
 template <class T> static void rel(T *&p) { if (p) { p->Release(); p = NULL; } }
 
-static DWORD WINAPI filter_thread(LPVOID unused) {
-    (void)unused;
+static DWORD WINAPI filter_thread(LPVOID pidArg) {
+    const DWORD pid = (DWORD)(UINT_PTR)pidArg;   /* the process of this thread (a later filter_start does not change it) */
     const int scaler = g_set.fxScaler, fxaa = g_set.fxFxaa, dither = g_set.fxDither, keepAspect = g_set.keepAspect;
-    HWND mame = find_mame_window(g_pid, &g_stop), out = NULL;
+    HWND mame = find_mame_window(pid, &g_stop), out = NULL;
     HMODULE comp = LoadLibraryW(L"d3dcompiler_47.dll");
     PFN_COMPILE fn = comp ? (PFN_COMPILE)GetProcAddress(comp, "D3DCompile") : NULL;
     ID3D11Device *dev = NULL;
@@ -259,7 +256,7 @@ static DWORD WINAPI filter_thread(LPVOID unused) {
         DWORD fgpid = 0;
         while (PeekMessageW(&msg, NULL, 0, 0, PM_REMOVE)) { TranslateMessage(&msg); DispatchMessageW(&msg); }
         GetWindowThreadProcessId(GetForegroundWindow(), &fgpid);
-        visible = !IsIconic(mame) && fgpid == g_pid;   /* only while MAME has the focus: Alt+Tab shows the desktop */
+        visible = !IsIconic(mame) && fgpid == pid;   /* only while MAME has the focus: Alt+Tab shows the desktop */
         if (!visible) { if (IsWindowVisible(out)) ShowWindow(out, SW_HIDE); Sleep(60); continue; }
         if (!IsWindowVisible(out)) ShowWindow(out, SW_SHOWNOACTIVATE);
         GetWindowRect(mame, &wr);
@@ -291,6 +288,7 @@ static DWORD WINAPI filter_thread(LPVOID unused) {
         if (!PrintWindow(mame, mdc, 2 /* PW_RENDERFULLCONTENT */)) { Sleep(10); continue; }
         {   /* the client part of the window bitmap into the texture */
             D3D11_MAPPED_SUBRESOURCE mp;
+            if (offx < 0 || offy < 0 || offx + cw > bmpW || offy + ch > bmpH) continue;   /* the window was resized after its size was read: next frame */
             if (SUCCEEDED(ctx->Map(srcTex, 0, D3D11_MAP_WRITE_DISCARD, 0, &mp))) {
                 int y;
                 for (y = 0; y < ch; y++) memcpy((unsigned char *)mp.pData + (size_t)y * mp.RowPitch, bits + ((size_t)(offy + y) * bmpW + offx) * 4, (size_t)cw * 4);
@@ -364,25 +362,21 @@ done:
     if (wdc) ReleaseDC(NULL, wdc);
     if (out) DestroyWindow(out);
     if (comp) FreeLibrary(comp);
-    g_running = 0;
     return 0;
 }
 
 /* starts the filter window for a MAME process (it finds the window of the process by itself) */
 void filter_start(DWORD pid) {
     filter_stop();
-    g_pid = pid;
+    if (g_thread) return;   /* the old filter window did not end in time: no second one */
     g_stop = 0;
-    g_running = 1;
-    g_thread = CreateThread(NULL, 0, filter_thread, NULL, 0, NULL);
-    if (!g_thread) g_running = 0;
+    g_thread = CreateThread(NULL, 0, filter_thread, (LPVOID)(UINT_PTR)pid, 0, NULL);
 }
 
 void filter_stop(void) {
     if (!g_thread) return;
     g_stop = 1;
-    WaitForSingleObject(g_thread, 3000);
+    if (WaitForSingleObject(g_thread, 3000) == WAIT_TIMEOUT) return;   /* stuck (a MAME window that does not answer PrintWindow): it ends by itself; filter_start waits for that */
     CloseHandle(g_thread);
     g_thread = NULL;
-    g_running = 0;
 }

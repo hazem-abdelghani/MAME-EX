@@ -23,3 +23,5 @@ except Exception as e:
     for t,l,c in errs:
         if (t,l) in seen: continue
         seen.add((t,l)); print(t,'| line',l,':',lines[int(l)-1].strip()[:110])
+    if not errs: print(msg[:600])   # an error the pattern above does not know: shown as it is
+    sys.exit(1)   # a failed check must not look like a pass

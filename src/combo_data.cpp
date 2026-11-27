@@ -1,4 +1,4 @@
-/* Generated from the SFEX2 Plus FAQ moves lists (input-plugin/presets/gen_presets.py). DO NOT EDIT. */
+/* The move lists of the Combos tab (Street Fighter EX2 Plus characters), from the FAQ move lists. The generator script is not part of this source: edit this file by hand. */
 #include "common.h"
 
 static const ComboMove moves0[] = {

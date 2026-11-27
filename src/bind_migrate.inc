@@ -1,5 +1,4 @@
 /* ---------------------------------------------------------------- repairing older mapping rows */
-static std::string trigger_code(int dev, const char *name, const char *fallbackTok) { (void)fallbackTok; return bind_trigger_code(dev, name[0] == 'R'); }
 
 /* Rows made by older builds hold only what the pad capture wrote: no key (the pad button replaced MAME's default key), one source for a direction,
    the codes of the first LT / RT try (the right stick). They are completed once: the default key comes back, a direction gets the D-pad and the stick,
@@ -20,9 +19,9 @@ int bind_migrate(void) {
             size_t u = c.find('_');
             std::string item = u == std::string::npos ? c : c.substr(u + 1);
             if (d > 0) dev = d;
-            if (padprobe_is_xinput(dev)) {   /* only an XInput pad had the triggers on those axes by mistake: on a DirectInput pad ZAXIS is the real trigger axis and RZAXIS the right stick */
-                if (item == "RZAXIS_NEG_SWITCH") { c = trigger_code(dev, "RT", "SLIDER2"); changed = rowChanged = 1; }
-                else if (item == "ZAXIS_NEG_SWITCH") { c = trigger_code(dev, "LT", "SLIDER1"); changed = rowChanged = 1; }
+            if (padprobe_device_known(dev) && padprobe_is_xinput(dev)) {   /* only an XInput pad had the triggers on those axes by mistake: on a DirectInput pad ZAXIS is the real trigger axis and RZAXIS the right stick */
+                if (item == "RZAXIS_NEG_SWITCH") { c = bind_trigger_code(dev, 1); changed = rowChanged = 1; }
+                else if (item == "ZAXIS_NEG_SWITCH") { c = bind_trigger_code(dev, 0); changed = rowChanged = 1; }
             }
             if (c.find("HAT") != std::string::npos) hasHat = 1;
             if (c.find("AXIS_") != std::string::npos && c.find("_SWITCH") != std::string::npos && (c.find("XAXIS") != std::string::npos || c.find("YAXIS") != std::string::npos)) hasStick = 1;

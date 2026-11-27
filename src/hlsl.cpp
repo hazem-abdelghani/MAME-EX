@@ -52,7 +52,6 @@ static const struct { const wchar_t *name; const char *words; } kPresets[] = {
 
 typedef struct { std::string val[NOPT]; HWND lv, cbPre; } HCtx;
 
-static std::wstring wa(const char *s) { wchar_t *w = u8_to_w(s, -1); std::wstring r = w; free(w); return r; }
 
 static void parse_words(const char *text, HCtx *c) {   /* "-name value ..." into the values */
     std::string t = text, tok;
@@ -157,7 +156,7 @@ static int hlsl_ok(Modal *md) {
     int fits = wcslen(ww) < sizeof g_set.hlslOpts / sizeof(wchar_t);
     if (fits) wcscpy(g_set.hlslOpts, ww);
     free(ww);
-    if (!fits) { MessageBoxW(md->dlg, L"Too many changed options for the settings file: reset some of them to their defaults.", L"HLSL Settings", MB_OK | MB_ICONINFORMATION); return 0; }
+    if (!fits) { msg_box(md->dlg, L"HLSL Settings", L"Too many changed options for the settings file: reset some of them to their defaults.", MB_OK | MB_ICONINFORMATION, NULL); return 0; }
     return 1;
 }
 

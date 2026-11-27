@@ -5,7 +5,6 @@
 #include <string>
 #include <vector>
 
-#define WM_RC_DONE (WM_APP + 10)
 
 typedef struct {
     HWND dlg;
@@ -56,7 +55,6 @@ static DWORD WINAPI check_thread(LPVOID p) {
         size_t len = 0;
         unsigned char *data;
         ZipReport rep;
-        DWORD attr;
         int k;
         {
             std::wstring p = find_set(j, j->names[i], L".zip");
@@ -69,7 +67,6 @@ static DWORD WINAPI check_thread(LPVOID p) {
                 continue;
             }
             wcsncpy(path, p.c_str(), 699); path[699] = 0;
-            attr = 0;
         }
         data = (unsigned char *)read_file(path, &len);
         if (!data) { addf(&b, L"%ls.zip (%ls): found, but it cannot be read (in use, or no access?)\r\n", j->names[i], j->role[i]); bad++; continue; }
@@ -98,11 +95,9 @@ static DWORD WINAPI check_thread(LPVOID p) {
         buf_add(&b, "\r\nMAME's own check (-verifyroms):\r\n");
         if (!mame_exe(exe, 560)) buf_add(&b, "mame.exe was not found (General tab > MAME Program), so this check could not run.\r\n");
         else {
-            size_t rl = wcslen(j->rompath);
-            if (rl && j->rompath[rl - 1] == L'\\' && rl < 1198) wcscat(j->rompath, L"\\");   /* a trailing backslash (D:\) must not swallow the closing quote */
-            if (j->rompath[0]) _snwprintf(cmd, 1600, L"-verifyroms %ls -rompath \"%ls\"", j->set, j->rompath);
-            else _snwprintf(cmd, 1600, L"-verifyroms %ls", j->set);
-            cmd[1599] = 0;
+            std::wstring cw = L"-verifyroms " + quote_arg(j->set);
+            if (j->rompath[0]) cw += L" -rompath " + quote_arg(j->rompath);
+            wcsncpy(cmd, cw.c_str(), 1599); cmd[1599] = 0;
             if (mame_run_capture(cmd, &mo, 60000, &code) != 0) buf_add(&b, "MAME did not answer.\r\n");
             else {
                 char *p, *q;
@@ -129,14 +124,12 @@ static DWORD WINAPI check_thread(LPVOID p) {
     return 0;
 }
 
-static LRESULT CALLBACK dummy_unused(HWND h, UINT m, WPARAM w, LPARAM l) { return DefWindowProcW(h, m, w, l); }
 
 void dlg_check_roms(HWND owner, const Game *g) {
     Modal md;
     Job *j = new Job();
     const wchar_t *cand[3], *role[3] = {L"game", L"parent set", L"BIOS"};
     int i, k;
-    (void)dummy_unused;
     memset(&md, 0, sizeof md);
     md.kind = 7; md.owner = owner;
     wcscpy(md.title, L"Check ROM Set");
@@ -149,20 +142,14 @@ void dlg_check_roms(HWND owner, const Game *g) {
     j->dlg = md.dlg;
     wcsncpy(j->title, g->title, 299);
     wcsncpy(j->set, g->set, 63);
-    {   /* the -rompath of a start, so MAME looks where the launcher looks */
-        ArgList a;
-        int ai;
-        mame_args(g->id, NULL, &a);
-        for (ai = 0; ai + 1 < a.n; ai++) if (!wcscmp(a.a[ai], L"-rompath")) { wcsncpy(j->rompath, a.a[ai + 1], 1199); break; }
-        args_free(&a);
-    }
+    mame_rompath(j->rompath, 1200);   /* the -rompath of a start, so MAME looks where the launcher looks */
     roms_dir_abs(j->dir, 560);
     {   /* every folder of the ROMs setting (MAME and the launcher look in all of them) */
         wchar_t cp[1200], *tok, *save = NULL, ab[700];
         wcsncpy(cp, g_set.roms, 1199); cp[1199] = 0;
-        for (tok = wcstok_s(cp, L";", &save); tok; tok = wcstok_s(NULL, L";", &save)) { trim_w(tok); if (tok[0]) { if (is_abs_path(tok)) wcsncpy(ab, tok, 699); else path_join(ab, 700, g_root, tok); ab[699] = 0; j->dirs.push_back(ab); } }
+        for (tok = wcstok_s(cp, L";", &save); tok; tok = wcstok_s(NULL, L";", &save)) { trim_w(tok); if (tok[0]) { abs_path(tok, ab, 700); j->dirs.push_back(ab); } }
         if (j->dirs.empty()) j->dirs.push_back(j->dir);
-        if (g_set.biosDir[0]) { if (is_abs_path(g_set.biosDir)) wcsncpy(ab, g_set.biosDir, 699); else path_join(ab, 700, g_root, g_set.biosDir); ab[699] = 0; j->dirs.push_back(ab); }   /* the BIOS folder: BIOS sets are looked for there too */
+        if (g_set.biosDir[0]) { abs_path(g_set.biosDir, ab, 700); j->dirs.push_back(ab); }   /* the BIOS folder: BIOS sets are looked for there too */
     }
     for (i = 0; i < 3; i++) {
         int dup = 0;

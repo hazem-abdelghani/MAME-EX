@@ -16,7 +16,7 @@ so favorites and per-game settings stay valid when the list is regenerated.
 """
 import os, re, sys, urllib.request
 
-BASE = "https://raw.githubusercontent.com/mamedev/mame/master/src/mame/"
+BASE = "https://raw.githubusercontent.com/mamedev/mame/mame0289/src/mame/"
 # file -> (path in the MAME tree, {BIOS root set: hardware} or a plain hardware name for a file without BIOS root)
 BOARDS = [
     ("zn.cpp", "sony/zn.cpp", {

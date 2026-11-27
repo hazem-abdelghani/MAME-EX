@@ -13,6 +13,7 @@ typedef struct {
 /* checks the directory of the zip and the CRC of every file; 1 when everything is fine */
 int zip_verify(const unsigned char *buf, size_t len, ZipReport *rep);
 
+#define ZIP_MAXENT 20000   /* the most entries that are listed / checked (a backup of the MAME saves can hold thousands of files) */
 typedef struct { char name[260]; unsigned long csize, usize, crc; int method; unsigned long offset; } ZipEntry;
 /* lists the entries (max of them); returns the count or -1 when the zip is damaged */
 int zip_entries(const unsigned char *buf, size_t len, ZipEntry *out, int max);

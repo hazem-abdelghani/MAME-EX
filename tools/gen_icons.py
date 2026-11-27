@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Builds icon_data.c from the PNG files of tools/icons (the pictures of the sequence buttons on the Combos tab).
+"""Builds icon_data.cpp from the PNG files of tools/icons (the pictures of the sequence buttons on the Combos tab).
 Usage: python gen_icons.py     (needs "pip install pillow"; run it again when a PNG changes)"""
 import glob, os
 from PIL import Image

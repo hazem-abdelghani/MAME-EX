@@ -1,4 +1,4 @@
-/* Controls profiles: the key / pad mapping and the controller options under a name (profiles\\<name>.cfg next to the launcher). */
+/* Controls profiles: the key / pad mapping (with the autofire flags) under a name (profiles\\<name>.cfg next to the launcher). */
 #include "common.h"
 #include <vector>
 #include <string>
@@ -20,7 +20,16 @@ void profile_clean_name(wchar_t *name) {
     trim_w(name);
     if (wcslen(name) > 60) name[60] = 0;
     trim_w(name);
-    { size_t l = wcslen(name); while (l && name[l - 1] == L'.') name[--l] = 0; }   /* a name that ends with a dot is not a file name */
+    for (;;) { size_t l = wcslen(name); if (l && (name[l - 1] == L'.' || name[l - 1] == L' ')) name[l - 1] = 0; else break; }   /* a name that ends with a dot or a blank is not a file name */
+    {   /* the names of Windows devices cannot be file names */
+        static const wchar_t *const dev[] = {L"CON", L"PRN", L"AUX", L"NUL", L"COM1", L"COM2", L"COM3", L"COM4", L"COM5", L"COM6", L"COM7", L"COM8", L"COM9", L"LPT1", L"LPT2", L"LPT3", L"LPT4", L"LPT5", L"LPT6", L"LPT7", L"LPT8", L"LPT9"};
+        size_t k;
+        wchar_t base[64], *dot;
+        wcsncpy(base, name, 63); base[63] = 0;
+        if ((dot = wcschr(base, L'.')) != NULL) *dot = 0;   /* "con.foo" is the console device as well */
+        for (k = 0; k < sizeof dev / sizeof dev[0]; k++) if (!_wcsicmp(base, dev[k])) { wcscat(name, L"_"); break; }
+        if (!_wcsicmp(name, L"None")) wcscat(name, L"_");   /* the first entry of the profile list is "None" */
+    }
 }
 
 int profile_exists(const wchar_t *name) { wchar_t p[700]; file_path(name, p, 700); return file_exists(p); }
@@ -63,7 +72,10 @@ int profile_rename(const wchar_t *from, const wchar_t *to) {
     if (!_wcsicmp(from, to)) {   /* only the case of the letters: through a temporary name */
         wchar_t t[700];
         _snwprintf(t, 700, L"%ls.tmp", a);
-        return MoveFileW(a, t) && MoveFileW(t, b);
+        if (!MoveFileW(a, t)) return 0;
+        if (MoveFileW(t, b)) return 1;
+        MoveFileW(t, a);   /* the second step failed: the profile goes back to its name */
+        return 0;
     }
     return MoveFileW(a, b);   /* fails when the new name exists */
 }

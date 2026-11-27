@@ -9,13 +9,13 @@
 
 enum { PG_SYSTEM, PG_VIDEO, PG_AUDIO, PG_CONTROLS, PG_COMBOS, NPAGES };   /* the tabs of the right pane, in order */
 
-typedef struct { HWND lbl, ctl, btn, clr; int kind; } PRow;   /* kind 0: label + combo, 1: label + edit (btn: Browse, clr: X, to the right of it), 2: wide check box, 3: wide button, 5: group title, 6: wide note text */
+typedef struct { HWND lbl, ctl, btn, clr; int kind; } PRow;   /* kind 0: label + combo, 1: label + edit (btn: Browse, clr: X, to the right of it), 2: wide check box, 3: wide button, 4: second label + edit on the row of the edit before it, 5: group title, 6: wide note text, 7: the mapping list, 8: four buttons in a row, 11: a list after a check box on its row */
 
 /* ---------------------------------------------------------------- state */
 static struct {
     HWND status, tip, tab, page[NPAGES];
     HWND cbRegion, cbMaker, cbGenre, cbHw;
-    HWND lblSearch, search, clearBtn, sortBtn, lv, favOnly, iconBtn, stopBtn, playBtn, saveBtn, cancelBtn, defBtn;
+    HWND lblSearch, lblFilters, search, clearBtn, sortBtn, lv, favOnly, stopBtn, playBtn, saveBtn, cancelBtn, defBtn;
     HWND tbRefresh, tbFav, tbAvail, tbFs, tbSet, tbVideo, tbAudio, tbCtl, tbAdv, tbSep1, tbSep2;
     /* general */
     HWND eMame, bMameBrowse, bMameClear, eRoms, bRomBrowse, bRomClear, eBios, bBiosBrowse, bBiosClear, chAvail, chHide, chLogs, cbOnStart, chClassic, cbTheme;
@@ -27,28 +27,30 @@ static struct {
     HWND chJoy, cbProv, chMouse, chGun, chContr, chOvGame, cbAf, eDead, eSat, cbCtrlr, cbProf, bPSave, bPSaveAs, bPRen, bPDel, bOpenCfg, lvBind, bSetKey, bSetPad, bBindClear, bBindDef;
     /* advanced */
     HWND chSkip, chSkipW, chSave, chCheat, chQuit, eExtra;
-    PRow vrows[64], arows[8], srows[40], crows[24], xrows[8];
-    int nv, na, ns, nc, nx;
+    PRow vrows[64], arows[8], srows[40], crows[24];
+    int nv, na, ns, nc;
 } W;
 
 typedef struct { int w, h; } Mode;
 static Mode *g_modes;
 static int g_nmodes;
 
-static int g_applying, g_syncing, g_rebuilding;
-static char *g_savedSig;
+static int g_applying, g_rebuilding;
 static PROCESS_INFORMATION g_proc;
 static void sync_main_enable(void);
 static void hide_opt(int activateMain);
 static int g_mameWarned, g_lastGameId = -1;
 static int g_firstRun;   /* there was no settings file at the start: the key / pad mapping starts with the launcher's defaults */
+static unsigned g_rootHash;   /* of the launcher folder: the window of this folder carries it (single instance) */
+static void save_ui_state(void);
 static int g_romsKnown;   /* the ROM sets were read once */
-static int g_running, g_stopped, g_minimized;   /* g_minimized: the launcher was minimized for the game */
+int g_running;   /* a game started by the launcher is running (the DIP switch window needs it off) */
+static int g_stopped, g_minimized;   /* g_minimized: the launcher was minimized for the game */
 static DWORD g_startTick;
 static int g_splitX, g_dragging;
 static HWND g_opt;            /* the options window (the tabs in a window of their own) */
 static HMENU g_optsMenu;      /* the Options menu of the menu bar */
-static HMENU g_viewMenu, g_themeMenu, g_colsMenu;
+static HMENU g_viewMenu, g_themeMenu, g_colsMenu, g_barsMenu;
 static int g_searchOv = -1;   /* for this session only: 1 the search bar was shown by Ctrl+F, 0 it was closed with Close; -1 as in the View menu (remembered) */
 #define SEARCH_SHOWN() (g_searchOv >= 0 ? g_searchOv : !g_set.hideSearch)
 static int g_optWin;          /* 1: the tabs are in the options window, 0: in the main window (the classic layout) */
@@ -66,7 +68,10 @@ static wchar_t g_regions[8][8], g_makers[32][40], g_genres[16][24], g_hws[32][40
 static int g_nreg, g_nmak, g_ngen, g_nhw;
 
 /* ---------------------------------------------------------------- helpers */
-static void set_status(const wchar_t *s) { SendMessageW(W.status, SB_SETTEXTW, 0, (LPARAM)s); }
+static void set_status(const wchar_t *s) {
+    SendMessageW(W.status, SB_SETTEXTW, 0, (LPARAM)s);
+    if (g_set.hideStatus && g_main) { wchar_t t[700]; if (s && s[0]) swprintf(t, 700, L"MAME EX - %ls", s); else wcscpy(t, L"MAME EX"); SetWindowTextW(g_main, t); }   /* the status bar is hidden: the messages go to the title bar */
+}
 static void get_status(wchar_t *s, int cap) {   /* at most cap - 1 characters, whatever the length of the text */
     int n = LOWORD(SendMessageW(W.status, SB_GETTEXTLENGTHW, 0, 0));
     wchar_t *tmp = (wchar_t *)calloc(n + 2, sizeof(wchar_t));
@@ -88,7 +93,7 @@ static void games_status(void) {
     wchar_t t[120];
     int i, have = 0;
     for (i = 0; i < g_ngames; i++) if (rom_available(&g_games[i])) have++;
-    swprintf(t, 120, L"%d games (PSX-based and Hyper Neo Geo 64 boards), %d with ROMs", g_ngames, have);
+    swprintf(t, 120, L"%d games (ZN, Namco, Konami, Taito and Hyper Neo Geo 64 boards), %d with ROMs", g_ngames, have);
     set_status(t);
 }
 
@@ -210,6 +215,26 @@ static void apply_columns(void) {
     }
 }
 
+/* Size All Columns to Fit: every shown column gets the width of its widest text (and of its title) */
+static void size_all_columns(void) {
+    int k;
+    if (!W.lv) return;
+    g_lvProg++;   /* the columns may be set by the program (the same as a double-click on a divider: header and content, not below the minimum) */
+    SendMessageW(W.lv, WM_SETREDRAW, FALSE, 0);
+    for (k = 0; k < NCOLS; k++) {
+        int w, mn = lv_min_w(W.lv, k);
+        if ((g_set.colsHidden >> k) & 1) continue;   /* a hidden column stays closed */
+        ListView_SetColumnWidth(W.lv, k, LVSCW_AUTOSIZE_USEHEADER);
+        w = ListView_GetColumnWidth(W.lv, k);
+        if (w < mn) ListView_SetColumnWidth(W.lv, k, mn);
+    }
+    SendMessageW(W.lv, WM_SETREDRAW, TRUE, 0);
+    g_lvProg--;
+    apply_columns();
+    RedrawWindow(W.lv, NULL, NULL, RDW_INVALIDATE | RDW_ALLCHILDREN);
+    save_ui_state();
+}
+
 /* right-click on the title of the list: which columns are shown */
 static LRESULT CALLBACK colhdr_proc(HWND h, UINT m, WPARAM w, LPARAM l, UINT_PTR id, DWORD_PTR ref) {
     (void)id; (void)ref;
@@ -218,6 +243,8 @@ static LRESULT CALLBACK colhdr_proc(HWND h, UINT m, WPARAM w, LPARAM l, UINT_PTR
         POINT pt = {(short)LOWORD(l), (short)HIWORD(l)};
         int k;
         for (k = 0; k < NCOLS; k++) { int c = kColOrder[k]; AppendMenuW(pm, MF_STRING | (c == 2 ? MF_GRAYED : 0) | (((g_set.colsHidden >> c) & 1) ? 0 : MF_CHECKED), ID_COL0 + c, kColNames[c]); }   /* Game always stays */
+        AppendMenuW(pm, MF_SEPARATOR, 0, NULL);
+        AppendMenuW(pm, MF_STRING, ID_M_SIZECOLS, L"Size All Columns to Fit");
         ClientToScreen(h, &pt);
         TrackPopupMenu(pm, TPM_RIGHTBUTTON, pt.x, pt.y, 0, g_main, NULL);
         DestroyMenu(pm);
@@ -229,6 +256,15 @@ static LRESULT CALLBACK colhdr_proc(HWND h, UINT m, WPARAM w, LPARAM l, UINT_PTR
 /* the title notifies the list: a hidden column cannot be dragged open */
 static LRESULT CALLBACK lvhdr_proc(HWND h, UINT m, WPARAM w, LPARAM l, UINT_PTR id, DWORD_PTR ref) {
     (void)id; (void)ref;
+    if (m == WM_SETCURSOR && LOWORD(l) == HTCLIENT && (HWND)w == h) {   /* the Favorite column (the star) is clickable: the hand cursor over the star only */
+        LVHITTESTINFO hi;
+        POINT pt;
+        GetCursorPos(&pt);
+        ScreenToClient(h, &pt);
+        memset(&hi, 0, sizeof hi);
+        hi.pt = pt;
+        if (ListView_SubItemHitTest(h, &hi) >= 0 && hi.iItem >= 0 && hi.iSubItem == 0 && (hi.flags & LVHT_ONITEMSTATEICON)) { SetCursor(LoadCursorW(NULL, IDC_HAND)); return TRUE; }
+    }
     if (m == WM_NOTIFY) {
         NMHEADERW *nh = (NMHEADERW *)l;
         if ((nh->hdr.code == HDN_BEGINTRACKW || nh->hdr.code == HDN_BEGINTRACKA || nh->hdr.code == HDN_DIVIDERDBLCLICKW || nh->hdr.code == HDN_DIVIDERDBLCLICKA) &&
@@ -277,7 +313,7 @@ static void fill_filters(void) {
     if (im > 0 && im <= g_nmak) wcscpy(keepM, g_makers[im - 1]);
     if (ig > 0 && ig <= g_ngen) wcscpy(keepG, g_genres[ig - 1]);
     { int ih = (int)SendMessageW(W.cbHw, CB_GETCURSEL, 0, 0); if (ih > 0 && ih <= g_nhw) wcscpy(keepH, g_hws[ih - 1]); }
-    if (!g_nreg && !g_nmak && !g_ngen && !g_nhw) { wcsncpy(keepR, g_set.fRegion, 7); wcsncpy(keepM, g_set.fMaker, 39); wcsncpy(keepG, g_set.fGenre, 23); wcsncpy(keepH, g_set.fHw, 39); }   /* the first fill: the filters of the last session */
+    if (!g_nreg && !g_nmak && !g_ngen && !g_nhw && !g_set.hideFilters) { wcsncpy(keepR, g_set.fRegion, 7); wcsncpy(keepM, g_set.fMaker, 39); wcsncpy(keepG, g_set.fGenre, 23); wcsncpy(keepH, g_set.fHw, 39); }   /* the first fill: the filters of the last session */
     g_nreg = g_nmak = g_ngen = g_nhw = 0;
     for (i = 0; i < g_ngames; i++) {
         const wchar_t *m = classify_maker(g_games[i].maker), *g = classify_genre(g_games[i].title);
@@ -310,6 +346,7 @@ static void fill_filters(void) {
     for (i = 0, sel = 0; i < g_ngen; i++) { SendMessageW(W.cbGenre, CB_ADDSTRING, 0, (LPARAM)g_genres[i]); if (!wcscmp(keepG, g_genres[i])) sel = i + 1; }
     SendMessageW(W.cbGenre, CB_SETCURSEL, sel, 0);
     SendMessageW(W.cbHw, CB_RESETCONTENT, 0, 0);
+    { HWND fc[] = {W.cbHw, W.cbRegion, W.cbMaker, W.cbGenre}; int q; for (q = 0; q < 4; q++) SendMessageW(fc[q], CB_SETDROPPEDWIDTH, S(230), 0); }   /* the lists are wider than the narrow boxes */
     SendMessageW(W.cbHw, CB_ADDSTRING, 0, (LPARAM)L"All Hardware");
     for (i = 0, sel = 0; i < g_nhw; i++) { SendMessageW(W.cbHw, CB_ADDSTRING, 0, (LPARAM)g_hws[i]); if (!wcscmp(keepH, g_hws[i])) sel = i + 1; }
     SendMessageW(W.cbHw, CB_SETCURSEL, sel, 0);
@@ -448,7 +485,6 @@ static void update_state(void) {   /* options that do not apply to the current c
 }
 
 static void update_buttons(void);
-static char *ui_sig(void);
 
 /* the ROM sets of the games are looked up again (the ROMs folder may have changed) */
 static int roms_refresh(int force) {   /* 1 when the sets were read again (the status icons then need a refresh) */
@@ -463,11 +499,24 @@ static int roms_refresh(int force) {   /* 1 when the sets were read again (the s
 static int playable(const Game *g) { return g && !g_running && !(g->flags & GF_UNKNOWN) && rom_available(g); }
 
 /* the settings of the tabs as they were last saved / applied: Cancel and the X of a window put them back
-   (ui_sig() reads the widgets into g_set all the time, so g_set alone cannot tell what was confirmed with OK) */
+   (update_buttons() reads the widgets into g_set all the time, so g_set alone cannot tell what was confirmed with OK) */
 static Settings g_snap;
 static int g_snapOk;
 static void snap_take(void) { memcpy(&g_snap, &g_set, offsetof(Settings, onlyAvail)); g_snapOk = 1; }
 static void snap_restore(void) { if (g_snapOk) memcpy(&g_set, &g_snap, offsetof(Settings, onlyAvail)); }
+/* settings_save for the actions that are saved at once (a sort order, a toolbar switch, a filter ...): the edits of the tabs that were not confirmed with OK are not written with them */
+static void save_ui_state(void) {
+    size_t n = offsetof(Settings, onlyAvail);
+    char *live;
+    if (!g_snapOk) { settings_save(); return; }
+    live = (char *)malloc(n);
+    if (!live) { settings_save(); return; }
+    memcpy(live, &g_set, n);
+    memcpy(&g_set, &g_snap, n);
+    settings_save();
+    memcpy(&g_set, live, n);
+    free(live);
+}
 
 /* the key and pad columns of the mapping list from the bindings in memory */
 static void prof_buttons(void);
@@ -555,7 +604,7 @@ static void prof_command(int id, int code) {
             if (!profile_rename(cur, nm)) { set_note(L"The profile could not be renamed"); return; }
         } else {
             int r = IDYES;
-            if (profile_exists(nm)) msg_box(g_main, L"Save Profile As", L"A profile with this name exists. Replace it?", MB_YESNO | MB_ICONQUESTION, &r);
+            if (profile_exists(nm)) msg_box(ui_owner(g_main), L"Save Profile As", L"A profile with this name exists. Replace it?", MB_YESNO | MB_ICONQUESTION, &r);
             if (r != IDYES) return;
             if (!prof_write(nm)) { set_note(L"The profile could not be saved"); return; }
         }
@@ -566,7 +615,7 @@ static void prof_command(int id, int code) {
     if (id == ID_C_PDEL) {
         int r = 0;
         if (!have) return;
-        msg_box(g_main, L"Delete Profile", L"Delete this profile?\n\nThe mapping in the list stays as it is.", MB_YESNO | MB_ICONQUESTION, &r);
+        msg_box(ui_owner(g_main), L"Delete Profile", L"Delete this profile?\n\nThe mapping in the list stays as it is.", MB_YESNO | MB_ICONQUESTION, &r);
         if (r != IDYES) return;
         profile_delete(cur);
         prof_fill(NULL);
@@ -588,11 +637,14 @@ static void apply_to_ui(void) {
         wchar_t exeChk[560];
         int mameOk = mame_exe(exeChk, 560);
         if (g_firstRun) {   /* the first start: the launcher's defaults, whatever cfg\default.cfg held before (a copy of it is kept) */
-            if (mameOk) bind_backup_cfg();
+            if (mameOk) { bind_backup_cfg(); padprobe_run(); }   /* the pad is asked first, so the default pad codes are the ones of this MAME */
             bind_reset_all();
             saved = mameOk ? bind_save() : 0;   /* without MAME the list shows them and OK writes them (into the folder of the MAME that is chosen then) */
-        } else if (bind_migrate()) saved = bind_save();
-        if (saved) { g_set.bindVer = 5; settings_save(); }   /* when the cfg could not be written the repair is tried again at the next start */
+        } else {
+            if (mameOk) padprobe_run();   /* the pads are known before the rows are repaired (the trigger codes depend on the kind of pad) */
+            if (bind_migrate()) saved = mameOk ? bind_save() : 0;
+        }
+        if (saved) { g_set.bindVer = 5; save_ui_state(); }   /* when the cfg could not be written the repair is tried again at the next start */
     }
     bind_fill();
     prof_fill(g_set.profile);
@@ -647,7 +699,7 @@ static void apply_to_ui(void) {
     for (i = 0, sel = 0; i < 5; i++) if (kSampleRates[i] == g_set.sampleRate) sel = i;
     set_combo(W.cbRate, sel);
     edit_set_int(W.eVol, -g_set.volume);
-    set_combo(W.cbLat, g_set.latency - 1);
+    set_combo(W.cbLat, g_set.latency);
     /* controls */
     ctl_set_checked(W.chJoy, g_set.joystick);
     set_combo(W.cbProv, g_set.joyProvider);
@@ -670,8 +722,6 @@ static void apply_to_ui(void) {
     tb_set_checked(W.tbFav, g_set.favOnly);
     update_state();
     g_applying = 0;
-    free(g_savedSig);
-    g_savedSig = ui_sig();
     snap_take();
     update_buttons();
 }
@@ -717,7 +767,7 @@ static void gather(void) {
     g_set.sound = get_combo(W.cbSound);
     g_set.sampleRate = kSampleRates[get_combo(W.cbRate) % 5];
     g_set.volume = -edit_int(W.eVol, 0, 32);
-    g_set.latency = get_combo(W.cbLat) + 1;
+    g_set.latency = get_combo(W.cbLat);
     g_set.joystick = ctl_checked(W.chJoy);
     g_set.joyProvider = get_combo(W.cbProv);
     g_set.mouse = ctl_checked(W.chMouse);
@@ -741,22 +791,10 @@ static void gather(void) {
     GetWindowTextW(W.eExtra, g_set.extra, 520); trim_w(g_set.extra);
 }
 
-/* describes everything "OK" would write, to tell whether anything changed */
-static char *ui_sig(void) {
-    Buf b = {0};
-    gather();
-    settings_sig(&b);
-    buf_fmt(&b, "classic=%d;", ctl_checked(W.chClassic));
-    return b.s;
-}
-
 static void update_buttons(void) {
-    char *s;
     if (g_applying) return;
-    enable_ctl(W.iconBtn, selected_game() != NULL);
     EnableWindow(W.playBtn, playable(selected_game()));
-    s = ui_sig();
-    free(s);
+    gather();   /* the widgets are read into g_set all the time (Play uses it): the saved copy for Cancel is g_snap */
 }
 
 static void set_optmode(int on, int show);
@@ -767,12 +805,10 @@ static int do_save(void) {
     want = !ctl_checked(W.chClassic);   /* the options layout is applied with the other settings */
     g_set.optWindow = want;
     cmb_save();
-    if (!bind_save()) set_note(L"Could not write the key mapping (MAME folder: cfg\\default.cfg)");
+    if (!bind_save()) msg_box(ui_owner(g_main), L"Key Mapping", L"The key mapping could not be written (MAME folder: cfg\\default.cfg). Is the folder writable?", MB_ICONWARNING, NULL);   /* a message box: a note would be overwritten at once by \"Settings saved\" */
     ok = settings_save();
-    if (!ok) set_note(L"Could not save the settings: the launcher folder is not writable");
+    if (!ok) msg_box(ui_owner(g_main), L"Save Settings", L"The settings could not be saved: the launcher folder is not writable.", MB_ICONWARNING, NULL);
     if (want != g_optWin) PostMessageW(g_main, WM_APP_LAYOUT, (WPARAM)want, 0);   /* after this message: the Save button itself moves */
-    free(g_savedSig);
-    g_savedSig = ui_sig();
     snap_take();
     update_buttons();
     return ok;
@@ -792,14 +828,14 @@ static void launch_game_opts(const Game *g, const PlayOpts *po) {
     int i, n;
     IntList rec = {0};
     wchar_t exe[560];
-    if (!g) { msg_box(g_main, L"Play", L"Select a game first.", MB_ICONINFORMATION, NULL); return; }
-    if (g_running) { msg_box(g_main, L"Play", L"A game is already running.", MB_ICONINFORMATION, NULL); return; }
-    if (g->flags & GF_UNKNOWN) { msg_box(g_main, L"Play", L"The installed MAME does not know this set (it is too old, or the set was renamed).", MB_ICONINFORMATION, NULL); return; }
-    if (!rom_available(g)) { msg_box(g_main, L"Play", L"The ROM files of this game were not found in the ROMs folder.", MB_ICONINFORMATION, NULL); return; }
+    if (!g) { msg_box(ui_owner(g_main), L"Play", L"Select a game first.", MB_ICONINFORMATION, NULL); return; }
+    if (g_running) { msg_box(ui_owner(g_main), L"Play", L"A game is already running.", MB_ICONINFORMATION, NULL); return; }
+    if (g->flags & GF_UNKNOWN) { msg_box(ui_owner(g_main), L"Play", L"The installed MAME does not know this set (it is too old, or the set was renamed).", MB_ICONINFORMATION, NULL); return; }
+    if (!rom_available(g)) { msg_box(ui_owner(g_main), L"Play", L"The ROM files of this game were not found in the ROMs folder.", MB_ICONINFORMATION, NULL); return; }
     if (!mame_exe(exe, 560)) {
         wchar_t t[700];
         swprintf(t, 700, L"mame.exe was not found:\n%ls\n\nChoose it on the General tab (MAME Program), or put it next to the launcher.", exe);
-        msg_box(g_main, L"MAME Not Found", t, MB_ICONWARNING, NULL);
+        msg_box(ui_owner(g_main), L"MAME Not Found", t, MB_ICONWARNING, NULL);
         return;
     }
     do_save();
@@ -808,7 +844,7 @@ static void launch_game_opts(const Game *g, const PlayOpts *po) {
     if (!mame_start(&a, &g_proc)) {
         wchar_t t[200];
         swprintf(t, 200, L"Windows error %lu", GetLastError());
-        msg_box(g_main, L"Could Not Start MAME", t, MB_ICONERROR, NULL);
+        msg_box(ui_owner(g_main), L"Could Not Start MAME", t, MB_ICONERROR, NULL);
         args_free(&a);
         return;
     }
@@ -828,10 +864,10 @@ static void launch_game_opts(const Game *g, const PlayOpts *po) {
     for (i = 0, n = 1; i < g_set.recent.n; i++) if (g_set.recent.v[i] != g->id && n < 8) { il_add(&rec, g_set.recent.v[i]); n++; }
     il_copy(&g_set.recent, &rec);
     il_clear(&rec);
-    settings_save();
+    save_ui_state();
     rebuild_recent();
     CloseHandle(CreateThread(NULL, 0, wait_thread, g_proc.hProcess, 0, NULL));
-    if (g_set.fxOn && !(po && po->noFilter)) filter_start(g_proc.dwProcessId);   /* the filter window, over the MAME window */
+    if (g_set.fxOn && g_set.onStart != 2 && !(po && po->noFilter)) filter_start(g_proc.dwProcessId);   /* the filter window, over the MAME window */
     if (g_set.onStart == 1) {   /* Minimize The Launcher: it comes back when the game ends */
         if (g_opt) hide_opt(0);
         ShowWindow(g_main, SW_MINIMIZE);
@@ -886,6 +922,7 @@ static void launch_recent(int slot) {
 }
 
 typedef struct { Game *list; int n; int err; } FetchResult;
+static FetchResult *g_pendingFetch;   /* a finished rescan that waits for the open dialog to close */
 static DWORD WINAPI fetch_thread(LPVOID force) {
     FetchResult *r = (FetchResult *)calloc(1, sizeof *r);
     r->err = games_load(&r->list, &r->n);
@@ -910,6 +947,7 @@ static int CALLBACK browse_cb(HWND h, UINT m, LPARAM l, LPARAM d) {   /* the fol
 static void browse_bios(void) {
     BROWSEINFOW bi;
     LPITEMIDLIST pidl;
+    HRESULT ci;
     wchar_t path[MAX_PATH], cur[560];
     memset(&bi, 0, sizeof bi);
     bi.hwndOwner = ui_owner(g_main);
@@ -917,21 +955,23 @@ static void browse_bios(void) {
     bi.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE;
     GetWindowTextW(W.eBios, cur, 560); trim_w(cur);
     if (!cur[0]) roms_dir_abs(cur, 560);
-    if (is_abs_path(cur)) wcsncpy(g_browseStart, cur, 559); else path_join(g_browseStart, 560, g_root, cur);
+    abs_path(cur, g_browseStart, 560);
     g_browseStart[559] = 0;
     if (GetFileAttributesW(g_browseStart) == INVALID_FILE_ATTRIBUTES) path_join(g_browseStart, 560, g_root, L"roms");
     bi.lpfn = browse_cb;
-    CoInitialize(NULL);
+    ci = CoInitialize(NULL);
     pidl = SHBrowseForFolderW(&bi);
     if (pidl) {
         if (SHGetPathFromIDListW(pidl, path)) { SetWindowTextW(W.eBios, path); refilter(); }
         CoTaskMemFree(pidl);
     }
+    if (SUCCEEDED(ci)) CoUninitialize();
 }
 
 static void browse_roms(void) {
     BROWSEINFOW bi;
     LPITEMIDLIST pidl;
+    HRESULT ci;
     wchar_t path[MAX_PATH];
     memset(&bi, 0, sizeof bi);
     bi.hwndOwner = ui_owner(g_main);
@@ -942,34 +982,38 @@ static void browse_roms(void) {
         GetWindowTextW(W.eRoms, cur, 560); trim_w(cur);
         { wchar_t *semi = wcschr(cur, L';'); if (semi) *semi = 0; }   /* the first of several folders */
         if (!cur[0]) roms_dir_abs(cur, 560);
-        if (is_abs_path(cur)) wcsncpy(g_browseStart, cur, 559); else path_join(g_browseStart, 560, g_root, cur);
+        abs_path(cur, g_browseStart, 560);
         g_browseStart[559] = 0;
         if (GetFileAttributesW(g_browseStart) == INVALID_FILE_ATTRIBUTES) path_join(g_browseStart, 560, g_root, L"roms");
     }
     bi.lpfn = browse_cb;
-    CoInitialize(NULL);
+    ci = CoInitialize(NULL);
     pidl = SHBrowseForFolderW(&bi);
     if (pidl) {
         if (SHGetPathFromIDListW(pidl, path)) {
             wchar_t all[1100];
             GetWindowTextW(W.eRoms, all, 520); trim_w(all);
-            if ((GetKeyState(VK_CONTROL) & 0x8000) && all[0]) { wcscat(all, L";"); wcsncat(all, path, 520); SetWindowTextW(W.eRoms, all); }   /* Ctrl: one more folder */
+            if ((GetKeyState(VK_CONTROL) & 0x8000) && all[0]) {   /* Ctrl: one more folder */
+                if (wcslen(all) + 1 + wcslen(path) > 519) msg_box(ui_owner(g_main), L"ROMs Folder", L"The list of ROMs folders is too long for the settings (519 characters). Remove a folder first.", MB_ICONINFORMATION, NULL);
+                else { wcscat(all, L";"); wcscat(all, path); SetWindowTextW(W.eRoms, all); }
+            }
             else SetWindowTextW(W.eRoms, path);
             refilter();
         }
         CoTaskMemFree(pidl);
     }
+    if (SUCCEEDED(ci)) CoUninitialize();
 }
 
 static void desktop_icon(void) {
     const Game *g = selected_game();
     wchar_t err[400];
-    if (!g) { msg_box(g_main, L"Desktop Icon", L"Select a game first.", MB_ICONINFORMATION, NULL); return; }
+    if (!g) { msg_box(ui_owner(g_main), L"Desktop Icon", L"Select a game first.", MB_ICONINFORMATION, NULL); return; }
     do_save();
     if (!create_desktop_icon(g, err, 400)) {
         wchar_t t[500];
         swprintf(t, 500, L"Could not create the shortcut:\n%ls", err);
-        msg_box(g_main, L"Desktop Icon", t, MB_ICONWARNING, NULL);
+        msg_box(ui_owner(g_main), L"Desktop Icon", t, MB_ICONWARNING, NULL);
         return;
     }
     {
@@ -983,6 +1027,7 @@ static void toggle_fav(void) {
     const Game *g = selected_game();
     if (!g) return;
     set_favorite(g->id, !il_has(&g_set.fav, g->id));
+    save_ui_state();
     refilter();
 }
 
@@ -1010,15 +1055,17 @@ static void do_backup(void) {
     if (!pick_zip(1, file, 560)) return;
     n = backup_create(file);
     if (n > 0) { wchar_t t[700]; swprintf(t, 700, L"Backup saved: %d files in %ls", n, file); set_note(t); }
-    else msg_box(g_main, L"Backup Settings", L"The backup could not be written.", MB_ICONWARNING, NULL);
+    else msg_box(ui_owner(g_main), L"Backup Settings", L"The backup could not be written.", MB_ICONWARNING, NULL);
 }
 
+static void apply_bars(void);
+static void do_layout(void);
 static void do_restore(void) {
     wchar_t file[560] = L"", keep[560];
     int r = 0, n;
-    if (g_running) { msg_box(g_main, L"Restore Settings", L"Stop the running game first.", MB_ICONINFORMATION, NULL); return; }
+    if (g_running) { msg_box(ui_owner(g_main), L"Restore Settings", L"Stop the running game first.", MB_ICONINFORMATION, NULL); return; }
     if (!pick_zip(0, file, 560)) return;
-    msg_box(g_main, L"Restore Settings",
+    msg_box(ui_owner(g_main), L"Restore Settings",
             L"Replace the current settings, per-game settings and the MAME saves (input mapping, nvram, save states) with the ones in this backup?\n\nThe current ones are saved first as MAME-EX-before-restore.zip in the launcher folder.",
             MB_YESNO | MB_ICONQUESTION, &r);
     if (r != IDYES) return;
@@ -1026,13 +1073,16 @@ static void do_restore(void) {
     path_join(keep, 560, g_root, L"MAME-EX-before-restore.zip");
     backup_create(keep);
     n = backup_restore(file);
-    if (n < 0) { msg_box(g_main, L"Restore Settings", L"This file is not a readable backup of MAME EX (damaged or not a zip).", MB_ICONWARNING, NULL); return; }
+    if (n < 0) { msg_box(ui_owner(g_main), L"Restore Settings", L"This file is not a readable backup of MAME EX (damaged or not a zip).", MB_ICONWARNING, NULL); return; }
     settings_defaults(&g_set, NULL);   /* then everything that the backup holds */
     settings_load();
     gamecfg_load();
     apply_to_ui();
+    g_nreg = g_nmak = g_ngen = g_nhw = 0;   /* the filters of the backup apply (as at the first fill) */
     fill_filters();
     refilter();
+    apply_bars(); apply_columns(); do_layout();   /* the bars, the toolbar labels, the columns and the splitter of the backup */
+    if ((g_set.optWindow != 0) != (g_optWin != 0)) PostMessageW(g_main, WM_APP_LAYOUT, (WPARAM)(g_set.optWindow != 0), 0);
     { wchar_t t[200]; swprintf(t, 200, L"Backup restored: %d files", n); set_note(t); }
 }
 
@@ -1053,7 +1103,7 @@ static void browse_mame(void) {
 /* Game > Game Settings: the video mode, window, sound, cheats ... of the selected game only */
 static void game_settings(void) {
     const Game *g = selected_game();
-    if (!g) { msg_box(g_main, L"Game Settings", L"Select a game first.", MB_ICONINFORMATION, NULL); return; }
+    if (!g) { msg_box(ui_owner(g_main), L"Game Settings", L"Select a game first.", MB_ICONINFORMATION, NULL); return; }
     if (dlg_game_settings(g_main, g)) {
         set_note(gamecfg_find(g->id) ? L"This game now has its own settings" : L"This game follows the main settings again");
         selection_status();
@@ -1062,8 +1112,8 @@ static void game_settings(void) {
 
 static void default_settings(void) {
     int r = 0;
-    msg_box(g_main, L"Default Settings",
-            L"Restore the Video, Audio and General options (including Skip Game Info / Warning Screen, Auto Save, Cheats, Confirm Quit and Extra Arguments) to their defaults (MAME's own defaults)?\n\nKept as they are: the MAME program, the ROMs folder, the favorites, the window layout, and the Controls and Combos tabs. The defaults are saved right away.",
+    msg_box(ui_owner(g_main), L"Default Settings",
+            L"Restore the Video, Audio and General options (including Skip Game Info / Warning Screen, Auto Save, Cheats, Confirm Quit, Extra Arguments, the HLSL, Display and Capture options and All MAME Options) to their defaults (MAME's own defaults)?\n\nKept as they are: the MAME program, the ROMs folder, the BIOS folder, the favorites, the window layout, and the Controls and Combos tabs. The defaults are saved right away.",
             MB_YESNO | MB_ICONQUESTION, &r);
     if (r != IDYES) return;
     gather();   /* what was typed in the paths stays */
@@ -1134,7 +1184,7 @@ static int layout_rows(PRow *r, int n, int w, int h, int off) {   /* returns the
         }
         if (r[i].kind == 3) { place(r[i].ctl, x, y, W2, S(26)); y += S(32); continue; }
         if (r[i].kind == 7) {   /* the list: all the room that is left (the rows after it keep theirs) */
-            int lh = h - y - (n - 1 - i) * S(34) - S(10);
+            int lh = h - y - (n - 1 - i) * S(32) - S(6) - S(10);   /* the rows after the list use 32 each, the list itself 6 below it: the page fits exactly (no scroll bar of 2 pixels) */
             if (lh < S(140)) lh = S(140);
             place(r[i].ctl, x, y, W2, lh);
             y += lh + S(6);
@@ -1232,7 +1282,6 @@ static void scroll_page_to(int pg, int pos) {
     }
 }
 
-static void size_columns(void);
 
 /* back to the default window: size, centered position, splitter and column widths */
 static void reset_window(int keepColumns) {
@@ -1269,7 +1318,10 @@ static void selection_status(void) {
     wchar_t miss[300], t[400];
     if (g_running) return;
     g = selected_game();
-    if (g && !rom_available(g) && rom_missing(g, miss, 300)) {
+    if (g && (g->flags & GF_UNKNOWN)) {   /* the Info column is hidden by default: say it here */
+        swprintf(t, 400, L"%ls: the installed MAME does not know this game: it cannot be started", g->title);
+        set_status(t);
+    } else if (g && !rom_available(g) && rom_missing(g, miss, 300)) {
         swprintf(t, 400, L"Missing in the ROMs folder: %ls", miss);
         set_status(t);
     } else {
@@ -1288,6 +1340,10 @@ static void apply_bars(void) {
         for (k = 0; k < (int)(sizeof tb / sizeof tb[0]); k++) ShowWindow(tb[k], t);
     }
     ShowWindow(W.lblSearch, s); ShowWindow(W.search, s); ShowWindow(W.clearBtn, s);
+    ShowWindow(W.lblFilters, f);
+    ShowWindow(W.status, g_set.hideStatus ? SW_HIDE : SW_SHOW);
+    if (!g_set.hideStatus && g_main) SetWindowTextW(g_main, L"MAME EX");
+    tb_show_labels(g_set.tbLabels);
     ShowWindow(W.cbRegion, f); ShowWindow(W.cbMaker, f); ShowWindow(W.cbGenre, f); ShowWindow(W.cbHw, f); ShowWindow(W.sortBtn, f);
 }
 
@@ -1313,38 +1369,49 @@ static void layout_tabs(int tx, int ty, int tw, int th, int sx, int sy) {
 
 static void layout_opt(void);
 
+/* the width of a toolbar button (with the names under the icons: as wide as its name) and of the whole toolbar */
+static int tb_btn_w(HWND b) {
+    if (g_set.tbLabels) { wchar_t t[40]; GetWindowTextW(b, t, 40); return std::max(S(46), text_width(g_main, t) + S(14)); }
+    return S(38);
+}
+static int toolbar_width(void) {
+    HWND btn[] = {W.tbRefresh, W.tbFav, W.tbAvail, W.playBtn, W.stopBtn, W.tbFs, W.tbSet, W.tbVideo, W.tbAudio, W.tbCtl, W.tbAdv};
+    int k, total = 0;
+    for (k = 0; k < (int)(sizeof btn / sizeof btn[0]); k++) {
+        if (k == 3 || k == 6) total += S(16);
+        total += tb_btn_w(btn[k]) + (k == 2 || k == 5 ? 0 : S(2));
+    }
+    return total;
+}
+
 static void do_layout(void) {
     RECT rc, tr;
-    int cw, ch, sbh, m = S(8), gap = S(8), x, y, w, h, leftW, rightX, rightW, i, bh = S(26), by, ly;
+    int cw, ch, sbh, m = S(8), gap = S(8), x, y, leftW, rightX, rightW, bh = S(26), ly;
     GetClientRect(g_main, &rc);
     SendMessageW(W.status, WM_SIZE, 0, 0);
     GetWindowRect(W.status, &tr);
-    sbh = tr.bottom - tr.top;
+    sbh = g_set.hideStatus ? 0 : tr.bottom - tr.top;
     cw = rc.right; ch = rc.bottom - sbh;
     if (g_splitX <= 0 && g_set.splitX > 0) g_splitX = S(g_set.splitX);   /* the splitter of the last session */
     if (g_splitX <= 0) g_splitX = (cw - 2 * m - gap) - S(660) > S(360) ? (cw - 2 * m - gap) - S(660) : (cw - 2 * m - gap) * 3 / 5;   /* the tabs get 660 pixels (the Combos tab needs them), the list the rest */
     leftW = g_splitX;
-    if (leftW < S(600)) leftW = S(600);   /* the toolbar is over the list */
+    { int minLeft = std::max(S(600), g_set.hideToolbar ? 0 : toolbar_width() + 2 * m); if (leftW < minLeft) leftW = minLeft; }   /* the toolbar is over the list: it must fit */
     if (leftW > cw - 2 * m - gap - S(300)) leftW = cw - 2 * m - gap - S(300);
     g_splitX = leftW;
     if (g_optWin) leftW = cw - 2 * m;   /* the tabs are in the options window: the list has the whole width */
-    {   /* the toolbar: Refresh, Favorites Only | Play, Stop, Fullscreen | Settings, Video, Audio, Controls, Combos */
-        int bx = m, ty = m, bw = S(38), bh2 = S(32), g2 = S(2), sp = S(16);
-        place(W.tbRefresh, bx, ty, bw, bh2); bx += bw + g2;
-        place(W.tbFav, bx, ty, bw, bh2); bx += bw + g2;
-        place(W.tbAvail, bx, ty, bw, bh2); bx += bw;
-        place(W.tbSep1, bx, ty, sp, bh2); bx += sp;
-        place(W.playBtn, bx, ty, bw, bh2); bx += bw + g2;
-        place(W.stopBtn, bx, ty, bw, bh2); bx += bw + g2;
-        place(W.tbFs, bx, ty, bw, bh2); bx += bw;
-        place(W.tbSep2, bx, ty, sp, bh2); bx += sp;
-        place(W.tbSet, bx, ty, bw, bh2); bx += bw + g2;
-        place(W.tbVideo, bx, ty, bw, bh2); bx += bw + g2;
-        place(W.tbAudio, bx, ty, bw, bh2); bx += bw + g2;
-        place(W.tbCtl, bx, ty, bw, bh2); bx += bw + g2;
-        place(W.tbAdv, bx, ty, bw, bh2);
+    {   /* the toolbar: Refresh, Favorites Only | Play, Stop, Fullscreen | Settings, Video, Audio, Controls, Combos (with the names under the icons: wider and higher buttons) */
+        int bx = m, ty = m, bh2 = g_set.tbLabels ? S(54) : S(32), g2 = S(2), sp = S(16);
+        HWND btn[] = {W.tbRefresh, W.tbFav, W.tbAvail, W.playBtn, W.stopBtn, W.tbFs, W.tbSet, W.tbVideo, W.tbAudio, W.tbCtl, W.tbAdv};
+        int k, nb = (int)(sizeof btn / sizeof btn[0]);
+        for (k = 0; k < nb; k++) {
+            int w = tb_btn_w(btn[k]);
+            if (k == 3) { place(W.tbSep1, bx, ty, sp, bh2); bx += sp; }   /* after Favorites / Available */
+            if (k == 6) { place(W.tbSep2, bx, ty, sp, bh2); bx += sp; }
+            place(btn[k], bx, ty, w, bh2);
+            bx += w + (k == 2 || k == 5 ? 0 : g2);
+        }
     }
-    x = m; y = m + (g_set.hideToolbar ? 0 : S(40));
+    x = m; y = m + (g_set.hideToolbar ? 0 : g_set.tbLabels ? S(62) : S(40));
     /* left: search row, list, buttons */
     ly = y;   /* top of the list: below the search bar and the filters bar when they are shown */
     if (SEARCH_SHOWN()) {
@@ -1354,12 +1421,13 @@ static void do_layout(void) {
         ly += S(32);
     }
     if (!g_set.hideFilters) {
-        int cw = (leftW - S(96) - 3 * S(6)) / 4;
-        place(W.cbHw, x, ly, cw, S(220));
-        place(W.cbRegion, x + (cw + S(6)), ly, cw, S(220));
-        place(W.cbMaker, x + 2 * (cw + S(6)), ly, cw, S(220));
-        place(W.cbGenre, x + 3 * (cw + S(6)), ly, cw, S(220));
-        place(W.sortBtn, x + leftW - S(90), ly - S(1), S(90), S(26));   /* Reset Filters */
+        int fx = x + S(54), cw = (leftW - S(54) - S(96) - 3 * S(6)) / 4;   /* the label "Filters:" is as wide as "Search:" */
+        place(W.lblFilters, x, ly + S(4), S(52), S(18));
+        place(W.cbHw, fx, ly, cw, S(220));
+        place(W.cbRegion, fx + (cw + S(6)), ly, cw, S(220));
+        place(W.cbMaker, fx + 2 * (cw + S(6)), ly, cw, S(220));
+        place(W.cbGenre, fx + 3 * (cw + S(6)), ly, cw, S(220));
+        place(W.sortBtn, x + leftW - S(90), ly - S(1), S(90), S(26));   /* Reset */
         ly += S(30);
     }
     place(W.lv, x, ly, leftW, ch - m - ly);
@@ -1384,7 +1452,7 @@ static void layout_opt(void) {
 /* ---------------------------------------------------------------- creating the window contents */
 #define TIP(h, key) set_tip(W.tip, GetParent(h), h, tip_for(key))
 
-static HWND add_label(HWND p, const wchar_t *t) { HWND l = mk(p, L"STATIC", t, SS_LEFT, 0, 0); TIP(l, t); return l; }
+static HWND add_label(HWND p, const wchar_t *t) { HWND l = mk(p, L"STATIC", t, SS_LEFT | SS_NOTIFY, 0, 0);   /* (SS_NOTIFY: a static only shows its tooltip when it gets mouse messages) */ TIP(l, t); return l; }
 
 static HWND add_combo(HWND p, PRow *rows, int *n, const wchar_t *label, int id, const wchar_t *const *items, int ni) {
     HWND l = add_label(p, label), c = mk(p, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP, 0, id);
@@ -1476,7 +1544,7 @@ static LRESULT CALLBACK page_proc(HWND h, UINT m, WPARAM w, LPARAM l) {
             si.cbSize = sizeof si; si.fMask = SIF_ALL;
             GetScrollInfo(h, SB_VERT, &si);
             pos = si.nPos;
-            if (m == WM_MOUSEWHEEL) pos -= (GET_WHEEL_DELTA_WPARAM(w) / 120) * S(46);
+            if (m == WM_MOUSEWHEEL) pos -= (GET_WHEEL_DELTA_WPARAM(w) * S(46)) / 120;   /* (fine wheel steps of less than 120 count too) */
             else switch (LOWORD(w)) {
             case SB_LINEUP: pos -= S(23); break;
             case SB_LINEDOWN: pos += S(23); break;
@@ -1559,7 +1627,7 @@ static LRESULT CALLBACK opt_proc(HWND h, UINT m, WPARAM w, LPARAM l) {
     return DefDlgProcW(h, m, w, l);
 }
 
-static void update_opt_menu(void) {   /* the Settings Layout box of the General tab shows the layout; Options > Settings… needs the separate window */
+static void update_opt_menu(void) {   /* the Classic Layout box of the General tab shows the layout; Options > Settings… needs the separate window */
     if (g_optsMenu) EnableMenuItem(g_optsMenu, ID_M_OPTWIN, MF_BYCOMMAND | (g_optWin ? MF_ENABLED : MF_GRAYED));
     if (W.chClassic && ctl_checked(W.chClassic) == (g_optWin != 0)) ctl_set_checked(W.chClassic, !g_optWin);
 }
@@ -1612,7 +1680,7 @@ static void set_optmode(int on, int show) {
         if (w > wa.right - wa.left) w = wa.right - wa.left;
         x = wa.left + (wa.right - wa.left - w) / 2; y = wa.top + (wa.bottom - wa.top - h) / 2;
         if (g_optRect.w > 0 && on_screen(g_optRect.x, g_optRect.y, g_optRect.w, g_optRect.h)) { x = g_optRect.x; y = g_optRect.y; w = g_optRect.w; h = g_optRect.h; }
-        g_opt = CreateWindowExW(0, L"ZOptions", L"Settings", WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, x, y, w, h, g_main, NULL, g_inst, NULL);
+        g_opt = CreateWindowExW(0, L"MameExOptions", L"Settings", WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, x, y, w, h, g_main, NULL, g_inst, NULL);
         if (!g_opt) return;
         th_window(g_opt);
     }
@@ -1634,17 +1702,15 @@ static void set_optmode(int on, int show) {
 }
 
 static void create_pages(void) {
-    static const wchar_t *offon[] = {L"Off", L"On"};
     static const wchar_t *prescale[] = {L"1x (Off)", L"2x", L"3x", L"4x", L"5x", L"6x", L"7x", L"8x"};
     static const wchar_t *fskip[] = {L"Off", L"Auto", L"1", L"2", L"3", L"4", L"5", L"6", L"7", L"8", L"9", L"10"};
     static const wchar_t *rates[] = {L"Default (48000 Hz)", L"22050 Hz", L"32000 Hz", L"44100 Hz", L"48000 Hz"};
-    static const wchar_t *latency[] = {L"1 (Lowest Delay)", L"2 (Default)", L"3", L"4", L"5 (Safest)"};
+    static const wchar_t *latency[] = {L"Default (MAME's Choice)", L"1 (Lowest Delay)", L"2", L"3", L"4", L"5 (Safest)"};
     HWND p;
     wchar_t **resl;
     int i;
-    (void)offon;
     for (i = 0; i < NPAGES; i++) {
-        W.page[i] = CreateWindowExW(0, L"ZPage", L"", WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS | (i == 0 ? WS_VISIBLE : 0), 0, 0, 10, 10, g_main, NULL, g_inst, NULL);
+        W.page[i] = CreateWindowExW(0, L"MameExPage", L"", WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS | (i == 0 ? WS_VISIBLE : 0), 0, 0, 10, 10, g_main, NULL, g_inst, NULL);
         BringWindowToTop(W.page[i]);
         th_control(W.page[i], L"SCROLLBAR");   /* the dark scroll bar of a long page */
     }
@@ -1684,6 +1750,7 @@ static void create_pages(void) {
         W.cbGlslF = add_combo(p, W.vrows, &W.nv, L"GLSL Filter", ID_V_GLSLF, glf, 3);
     }
     W.eGlslS = add_edit(p, W.vrows, &W.nv, L"GLSL Shader Name", ID_V_GLSLS, 0);
+    SendMessageW(W.eGlslS, EM_SETLIMITTEXT, 63, 0);
     add_header(p, W.vrows, &W.nv, L"BGFX");
     W.cbChain = add_combo(p, W.vrows, &W.nv, L"BGFX Screen Effect", ID_V_CHAIN, kChains, 6);
     W.cbBackend = add_combo(p, W.vrows, &W.nv, L"BGFX Backend", ID_V_BACKEND, kBackends, 6);
@@ -1698,7 +1765,7 @@ static void create_pages(void) {
     mo_edit_row(p, W.vrows, &W.nv, L"BGFX Shadow Mask", "bgfx_shadow_mask");
     mo_edit_row(p, W.vrows, &W.nv, L"BGFX LUT", "bgfx_lut");
     /* the Filter Window group, last */
-    add_header(p, W.vrows, &W.nv, L"Filter Window (Experimental)");
+    add_header(p, W.vrows, &W.nv, L"Filter Window");
     {
         static const wchar_t *scal[] = {L"Smooth (Bilinear)", L"Sharp (Pixels)", L"xBRZ", L"Sharp Bilinear", L"Smooth 3D (Bicubic)"};
         static const wchar_t *dith[] = {L"Off", L"Low", L"Medium", L"High"};
@@ -1714,7 +1781,7 @@ static void create_pages(void) {
     W.cbSound = add_combo(p, W.arows, &W.na, L"Sound", ID_A_MODE, kSoundModes, 5);
     W.cbRate = add_combo(p, W.arows, &W.na, L"Sample Rate", ID_A_RATE, rates, 5);
     W.eVol = add_edit(p, W.arows, &W.na, L"Volume Attenuation (dB)", ID_A_VOL, 1);
-    W.cbLat = add_combo(p, W.arows, &W.na, L"Audio Latency", ID_A_LAT, latency, 5);
+    W.cbLat = add_combo(p, W.arows, &W.na, L"Audio Latency", ID_A_LAT, latency, 6);
     /* Controls */
     p = W.page[PG_CONTROLS];
     W.chJoy = add_check(p, W.crows, &W.nc, L"Enable Joysticks", ID_C_JOY);
@@ -1736,14 +1803,12 @@ static void create_pages(void) {
     }
     W.cbCtrlr = add_combo(p, W.crows, &W.nc, L"Controller File", ID_C_CTRLR, NULL, 0);
     W.chOvGame = add_check(p, W.crows, &W.nc, L"Mapping Overrides MAME's Game Settings", ID_C_OVGAME);
-    TIP(W.chOvGame, L"Mapping Overrides MAME's Game Settings");
     {
         static const wchar_t *const afr[] = {L"10 Per Second", L"15 Per Second", L"20 Per Second", L"30 Per Second"};
         W.cbAf = add_combo(p, W.crows, &W.nc, L"Autofire Speed", ID_C_AFRATE, afr, 4);
     }
     add_header(p, W.crows, &W.nc, L"Key And Button Mapping");
     W.cbProf = add_combo(p, W.crows, &W.nc, L"Profile", ID_C_PROF, NULL, 0);
-    TIP(W.cbProf, L"Profile");
     W.bPSave = mk(p, L"BUTTON", L"Save", BS_PUSHBUTTON | WS_TABSTOP, 0, ID_C_PSAVE);
     W.bPSaveAs = mk(p, L"BUTTON", L"Save As…", BS_PUSHBUTTON | WS_TABSTOP, 0, ID_C_PSAVEAS);
     W.bPRen = mk(p, L"BUTTON", L"Rename…", BS_PUSHBUTTON | WS_TABSTOP, 0, ID_C_PREN);
@@ -1774,27 +1839,30 @@ static void create_pages(void) {
         W.crows[W.nc].lbl = W.bSetKey; W.crows[W.nc].ctl = W.bSetPad; W.crows[W.nc].btn = W.bBindClear; W.crows[W.nc].clr = W.bBindDef; W.crows[W.nc].kind = 8; W.nc++;
     }
     W.bOpenCfg = mk(p, L"BUTTON", L"Open MAME's Cfg Folder", BS_PUSHBUTTON | WS_TABSTOP, 0, ID_C_OPENCFG);
-    TIP(W.bOpenCfg, L"Browse…");
+    TIP(W.bOpenCfg, L"Open MAME's Cfg Folder");
     W.crows[W.nc].lbl = NULL; W.crows[W.nc].ctl = W.bOpenCfg; W.crows[W.nc].kind = 3; W.nc++;
     /* Combos */
     cmb_create(W.page[PG_COMBOS], W.tip);
     /* General */
     p = W.page[PG_SYSTEM];
     W.eMame = add_edit(p, W.srows, &W.ns, L"MAME Program", ID_S_MAME, 0);
+    SendMessageW(W.eMame, EM_SETLIMITTEXT, 519, 0);   /* the settings hold 520 characters: the box does not take more (no silent cut) */
     W.bMameBrowse = mk(p, L"BUTTON", L"Browse…", BS_PUSHBUTTON | WS_TABSTOP, 0, ID_S_MAMEBROWSE);
     TIP(W.bMameBrowse, L"Browse…");
     W.bMameClear = mk(p, L"BUTTON", L"X", BS_PUSHBUTTON | WS_TABSTOP, 0, ID_S_MAMECLEAR);
     TIP(W.bMameClear, L"Clear MAME Program");
     W.srows[0].btn = W.bMameBrowse; W.srows[0].clr = W.bMameClear;
     W.eRoms = add_edit(p, W.srows, &W.ns, L"ROMs Folder", ID_S_ROMS, 0);
+    SendMessageW(W.eRoms, EM_SETLIMITTEXT, 519, 0);
     W.bRomBrowse = mk(p, L"BUTTON", L"Browse…", BS_PUSHBUTTON | WS_TABSTOP, 0, ID_S_BROWSE);
     TIP(W.bRomBrowse, L"Browse…");
     W.bRomClear = mk(p, L"BUTTON", L"X", BS_PUSHBUTTON | WS_TABSTOP, 0, ID_S_ROMCLEAR);
     TIP(W.bRomClear, L"Clear ROMs Folder");
     W.srows[1].btn = W.bRomBrowse; W.srows[1].clr = W.bRomClear;
     W.eBios = add_edit(p, W.srows, &W.ns, L"BIOS Folder", ID_S_BIOS, 0);
+    SendMessageW(W.eBios, EM_SETLIMITTEXT, 519, 0);
     W.bBiosBrowse = mk(p, L"BUTTON", L"Browse…", BS_PUSHBUTTON | WS_TABSTOP, 0, ID_S_BIOSBROWSE);
-    TIP(W.bBiosBrowse, L"Browse…");
+    TIP(W.bBiosBrowse, L"Browse BIOS Folder");
     W.bBiosClear = mk(p, L"BUTTON", L"X", BS_PUSHBUTTON | WS_TABSTOP, 0, ID_S_BIOSCLEAR);
     TIP(W.bBiosClear, L"Clear BIOS Folder");
     W.srows[2].btn = W.bBiosBrowse; W.srows[2].clr = W.bBiosClear;
@@ -1817,6 +1885,7 @@ static void create_pages(void) {
     W.chCheat = add_check(p, W.srows, &W.ns, L"Cheats", ID_X_CHEAT);
     W.chQuit = add_check(p, W.srows, &W.ns, L"Confirm Quit", ID_X_QUIT);
     W.eExtra = add_edit(p, W.srows, &W.ns, L"Extra Arguments", ID_X_EXTRA, 0);
+    SendMessageW(W.eExtra, EM_SETLIMITTEXT, 519, 0);
     add_header(p, W.srows, &W.ns, L"Capture And Speed");
     mo_edit_row(p, W.srows, &W.ns, L"Speed", "speed");
     mo_check_row(p, W.srows, &W.ns, L"Rewind", "rewind");
@@ -1846,18 +1915,18 @@ static void create_ui(void) {
     SendMessageW(W.status, WM_SETFONT, (WPARAM)g_font, TRUE);
     W.lblSearch = mk(g_main, L"STATIC", L"Search:", SS_LEFT, 0, 0);
     W.search = mk(g_main, L"EDIT", L"", ES_AUTOHSCROLL | WS_TABSTOP, WS_EX_CLIENTEDGE, ID_SEARCH);
-    W.sortBtn = mk(g_main, L"BUTTON", L"Reset Filters", BS_PUSHBUTTON | WS_TABSTOP, 0, ID_RESETSORT);
+    W.lblFilters = mk(g_main, L"STATIC", L"Filters:", SS_LEFT, 0, 0);
+    W.sortBtn = mk(g_main, L"BUTTON", L"Reset", BS_PUSHBUTTON | WS_TABSTOP, 0, ID_RESETSORT);
     W.clearBtn = mk(g_main, L"BUTTON", L"Close", BS_PUSHBUTTON | WS_TABSTOP, 0, ID_CLEARSEARCH);
+    W.cbHw = mk(g_main, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP, 0, ID_F_HW);
     W.cbRegion = mk(g_main, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP, 0, ID_F_REGION);
     W.cbMaker = mk(g_main, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP, 0, ID_F_MAKER);
     W.cbGenre = mk(g_main, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP, 0, ID_F_GENRE);
-    W.cbHw = mk(g_main, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP, 0, ID_F_HW);
     SendMessageW(W.cbHw, CB_ADDSTRING, 0, (LPARAM)L"All Hardware"); SendMessageW(W.cbHw, CB_SETCURSEL, 0, 0);
     SendMessageW(W.cbRegion, CB_ADDSTRING, 0, (LPARAM)L"All Regions"); SendMessageW(W.cbRegion, CB_SETCURSEL, 0, 0);
     SendMessageW(W.cbMaker, CB_ADDSTRING, 0, (LPARAM)L"All Makers"); SendMessageW(W.cbMaker, CB_SETCURSEL, 0, 0);
     SendMessageW(W.cbGenre, CB_ADDSTRING, 0, (LPARAM)L"All Genres"); SendMessageW(W.cbGenre, CB_SETCURSEL, 0, 0); SendMessageW(W.cbHw, CB_SETCURSEL, 0, 0);
     set_tip(W.tip, g_main, W.sortBtn, tip_for(L"Reset Filters"));
-    set_tip(W.tip, g_main, W.defBtn, tip_for(L"Restore Defaults"));
     set_tip(W.tip, g_main, W.cbRegion, tip_for(L"Region Filter"));
     set_tip(W.tip, g_main, W.cbMaker, tip_for(L"Maker Filter"));
     set_tip(W.tip, g_main, W.cbGenre, tip_for(L"Genre Filter"));
@@ -1869,10 +1938,9 @@ static void create_ui(void) {
     ListView_SetColumnOrderArray(W.lv, NCOLS, (int *)kColOrder);
     ListView_SetImageList(W.lv, tb_status_images(S(16)), LVSIL_SMALL);
     ListView_SetImageList(W.lv, tb_star_images(S(16), th_gray(), RGB(255, 190, 0)), LVSIL_STATE);   /* the check box of a favorite is a star */
-    /* the state holders of Favorites Only and Create Desktop Icon stay (hidden); the toolbar has the visible buttons */
+    /* the state holder of Favorites Only stays (hidden); the toolbar has the visible buttons */
     W.favOnly = mk(g_main, L"BUTTON", L"Favorites Only", BS_AUTOCHECKBOX | WS_TABSTOP, 0, ID_FAVONLY);
-    W.iconBtn = mk(g_main, L"BUTTON", L"Create Desktop Icon", BS_PUSHBUTTON | WS_TABSTOP | WS_DISABLED, 0, ID_ICONBTN);
-    ShowWindow(W.favOnly, SW_HIDE); ShowWindow(W.iconBtn, SW_HIDE);
+    ShowWindow(W.favOnly, SW_HIDE);
     W.tbRefresh = tb_button(g_main, ID_M_RESCAN, TI_REFRESH);
     W.tbFav = tb_button(g_main, ID_TBFAV, TI_FAV);
     W.tbAvail = tb_button(g_main, ID_TBAVAIL, TI_AVAIL);
@@ -1887,6 +1955,13 @@ static void create_ui(void) {
     W.tbAudio = tb_button(g_main, ID_TBAUDIO, TI_AUDIO);
     W.tbCtl = tb_button(g_main, ID_TBCTL, TI_CONTROLS);
     W.tbAdv = tb_button(g_main, ID_TBCMB, TI_COMBOS);
+    {   /* the names under the icons (View > Toolbars > Show Toolbar Labels) */
+        static const struct { HWND *w; const wchar_t *t; } names[] = {{&W.tbRefresh, L"Refresh"}, {&W.tbFav, L"Favorites"}, {&W.tbAvail, L"Available"}, {&W.playBtn, L"Play"}, {&W.stopBtn, L"Stop"}, {&W.tbFs, L"Fullscreen"},
+                                                                       {&W.tbSet, L"Settings"}, {&W.tbVideo, L"Video"}, {&W.tbAudio, L"Audio"}, {&W.tbCtl, L"Controls"}, {&W.tbAdv, L"Combos"}};
+        int k;
+        for (k = 0; k < (int)(sizeof names / sizeof names[0]); k++) SetWindowTextW(*names[k].w, names[k].t);
+        tb_show_labels(g_set.tbLabels);
+    }
     set_tip(W.tip, g_main, W.tbRefresh, L"Refresh (F5)");
     set_tip(W.tip, g_main, W.tbFav, L"Favorites Only");
     set_tip(W.tip, g_main, W.tbAvail, L"List Only Available ROMs");
@@ -1906,6 +1981,7 @@ static void create_ui(void) {
     W.saveBtn = mk(g_main, L"BUTTON", L"OK", BS_PUSHBUTTON | WS_TABSTOP, 0, ID_SAVEBTN);
     W.cancelBtn = mk(g_main, L"BUTTON", L"Cancel", BS_PUSHBUTTON | WS_TABSTOP, 0, ID_CANCELBTN);
     W.defBtn = mk(g_main, L"BUTTON", L"Restore Defaults", BS_PUSHBUTTON | WS_TABSTOP, 0, ID_DEFAULTBTN);
+    set_tip(W.tip, g_main, W.defBtn, tip_for(L"Restore Defaults"));
     create_pages();
 }
 
@@ -1927,7 +2003,7 @@ static HMENU build_menu(void) {
     AppendMenuW(file, MF_STRING, ID_M_RESTORE, L"Res&tore Settings…");
     AppendMenuW(file, MF_SEPARATOR, 0, NULL);
     AppendMenuW(file, MF_STRING, ID_M_EXIT, L"E&xit");
-    AppendMenuW(game, MF_STRING, ID_M_PLAY, L"&Play\tEnter");
+    AppendMenuW(game, MF_STRING, ID_M_PLAY, L"&Play\tCtrl+Enter");
     AppendMenuW(game, MF_STRING, ID_M_STOP, L"&Stop");
     AppendMenuW(game, MF_STRING, ID_M_PLAYFS, L"Play &Fullscreen");
     AppendMenuW(game, MF_STRING, ID_M_PLAYWIN, L"Play &Windowed");
@@ -1939,7 +2015,7 @@ static HMENU build_menu(void) {
     AppendMenuW(set, MF_STRING, ID_M_OPTWIN, L"Se&ttings…\tF9");   /* the settings window: when the tabs are in it */
     AppendMenuW(set, MF_SEPARATOR, 0, NULL);
     AppendMenuW(set, MF_STRING, ID_TBVIDEO, L"&Video Settings");
-    AppendMenuW(set, MF_STRING, ID_M_SETAUDIO, L"&Audio Settings");
+    AppendMenuW(set, MF_STRING, ID_TBAUDIO, L"&Audio Settings");
     AppendMenuW(set, MF_STRING, ID_TBCTL, L"&Controls Settings");
     AppendMenuW(set, MF_STRING, ID_TBCMB, L"Co&mbos Settings");
     AppendMenuW(help, MF_STRING, ID_M_KEYS, L"&Keyboard Shortcuts");
@@ -1960,18 +2036,27 @@ static HMENU build_menu(void) {
         AppendMenuW(view, MF_STRING, ID_M_FAVONLY, L"&Favorites Only");
         AppendMenuW(view, MF_STRING, ID_M_AVAIL, L"List Only &Available ROMs");
         AppendMenuW(view, MF_SEPARATOR, 0, NULL);
+        {   /* the bars of the window */
+            HMENU bars = CreatePopupMenu();
+            AppendMenuW(bars, MF_STRING, ID_M_SHOWTOOLBAR, L"Show Tool&bar");
+            AppendMenuW(bars, MF_STRING, ID_M_TBLABELS, L"Show Toolbar &Labels");
+            AppendMenuW(bars, MF_SEPARATOR, 0, NULL);
+            AppendMenuW(bars, MF_STRING, ID_M_SHOWSEARCH, L"Show &Search Bar");
+            AppendMenuW(bars, MF_STRING, ID_M_SHOWFILTERS, L"Show &Filter Bar");
+            AppendMenuW(bars, MF_STRING, ID_M_SHOWSTATUS, L"Show S&tatus Bar");
+            AppendMenuW(view, MF_POPUP, (UINT_PTR)bars, L"&Toolbars");
+            g_barsMenu = bars;
+        }
         {   /* the columns of the game list */
             HMENU cols = CreatePopupMenu();
             static const wchar_t *const cn[NCOLS] = {L"&Favorite", L"&#", L"&Game", L"&Info", L"&Status", L"&Hardware", L"&Year"};
             int k;
             for (k = 0; k < NCOLS; k++) AppendMenuW(cols, MF_STRING | (kColOrder[k] == 2 ? MF_GRAYED : 0), ID_COL0 + kColOrder[k], cn[kColOrder[k]]);
+            AppendMenuW(cols, MF_SEPARATOR, 0, NULL);
+            AppendMenuW(cols, MF_STRING, ID_M_SIZECOLS, L"&Size All Columns to Fit");
             AppendMenuW(view, MF_POPUP, (UINT_PTR)cols, L"List &Columns");
             g_colsMenu = cols;
         }
-        AppendMenuW(view, MF_SEPARATOR, 0, NULL);
-        AppendMenuW(view, MF_STRING, ID_M_SHOWTOOLBAR, L"Show Tool&bar");
-        AppendMenuW(view, MF_STRING, ID_M_SHOWSEARCH, L"Show &Search Bar");
-        AppendMenuW(view, MF_STRING, ID_M_SHOWFILTERS, L"Show Filter Ba&r");
         AppendMenuW(view, MF_SEPARATOR, 0, NULL);
         AppendMenuW(view, MF_STRING, ID_M_LAY0, L"Classic &Layout");   /* checked: the settings are in the main window; unchecked: in a window of their own */
         AppendMenuW(view, MF_STRING, ID_M_RESETWIN, L"&Reset Window Size");
@@ -2001,14 +2086,14 @@ static void apply_theme_mode(int mode) {
     g_set.themeMode = mode;
     set_combo(W.cbTheme, mode);
     settings_resolve_theme();
-    settings_save();
+    save_ui_state();
     if (g_set.dark != g_dark) {
         int r = 0;
-        msg_box(g_main, L"Theme", L"The theme changes after a restart.\n\nRestart the launcher now?", MB_YESNO | MB_ICONQUESTION, &r);
+        msg_box(ui_owner(g_main), L"Theme", L"The theme changes after a restart.\n\nRestart the launcher now?", MB_YESNO | MB_ICONQUESTION, &r);
         if (r == IDYES) {
             wchar_t self[MAX_PATH];
             if (do_save() && GetModuleFileNameW(NULL, self, MAX_PATH)) {
-                if ((INT_PTR)ShellExecuteW(g_main, NULL, self, NULL, NULL, SW_SHOWNORMAL) > 32) SendMessageW(g_main, WM_CLOSE, 0, 0);
+                if ((INT_PTR)ShellExecuteW(g_main, NULL, self, L"--restarted", NULL, SW_SHOWNORMAL) > 32) SendMessageW(g_main, WM_CLOSE, 0, 0);
                 else set_note(L"Could not restart: start the launcher again yourself");
             }
         } else set_note(L"The theme changes at the next start");
@@ -2024,7 +2109,7 @@ static void on_command(int id, int code, HWND src) {
     case ID_M_OPENCFG: case ID_C_OPENCFG: { wchar_t d[600], m[560]; mame_dir(m, 560); path_join(d, 600, m, L"cfg"); CreateDirectoryW(d, NULL); open_folder(d); return; }
     case ID_M_MAMEHELP: ShellExecuteW(g_main, L"open", L"https://docs.mamedev.org/", NULL, NULL, SW_SHOWNORMAL); return;
     case ID_M_OPENROMS: { wchar_t d[600]; roms_dir_abs(d, 600); CreateDirectoryW(d, NULL); open_folder(d); return; }
-    case ID_M_CLEARRECENT: il_clear(&g_set.recent); settings_save(); rebuild_recent(); return;
+    case ID_M_CLEARRECENT: il_clear(&g_set.recent); save_ui_state(); rebuild_recent(); return;
     case ID_M_EXIT: SendMessageW(g_main, WM_CLOSE, 0, 0); return;
     case ID_M_PLAY: case ID_PLAYBTN: if (code == BN_CLICKED || code == 1 || id == ID_M_PLAY) launch_game(selected_game()); return;
     case ID_M_STOP: case ID_STOPBTN: if (g_running) { g_stopped = 1; mame_stop(&g_proc); } return;
@@ -2042,30 +2127,46 @@ static void on_command(int id, int code, HWND src) {
         wchar_t cur[560];
         GetWindowTextW(W.eRoms, cur, 560);
         if (!cur[0]) return;
-        msg_box(g_main, L"Clear ROMs Folder", L"Clear the ROMs folder?\n\nThe roms folder of MAME is used until you choose a folder again.", MB_YESNO | MB_ICONQUESTION, &r);
+        msg_box(ui_owner(g_main), L"Clear ROMs Folder", L"Clear the ROMs folder?\n\nThe roms folder of MAME is used until you choose a folder again.", MB_YESNO | MB_ICONQUESTION, &r);
         if (r != IDYES) return;
         SetWindowTextW(W.eRoms, L"");
         g_set.roms[0] = 0;
         refilter();
         return;
     }
-    case ID_M_CHECKROMS: { const Game *g = selected_game(); if (g) dlg_check_roms(g_main, g); else msg_box(g_main, L"Check ROM Set", L"Select a game first.", MB_ICONINFORMATION, NULL); return; }
+    case ID_M_CHECKROMS: { const Game *g = selected_game(); if (g) dlg_check_roms(g_main, g); else msg_box(ui_owner(g_main), L"Check ROM Set", L"Select a game first.", MB_ICONINFORMATION, NULL); return; }
     case ID_M_THEME0: case ID_M_THEME1: case ID_M_THEME2: apply_theme_mode(id - ID_M_THEME0); return;   /* View > Theme */
-    case ID_M_FAVONLY: SendMessageW(W.favOnly, BM_CLICK, 0, 0); return;
     case ID_M_SHOWTOOLBAR:
-        g_set.hideToolbar = !g_set.hideToolbar; apply_bars(); do_layout(); settings_save();
+        g_set.hideToolbar = !g_set.hideToolbar; apply_bars(); do_layout(); save_ui_state();
         RedrawWindow(g_main, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW);   /* the Save Settings button moved */
         return;
-    case ID_M_SHOWSEARCH: g_set.hideSearch = SEARCH_SHOWN(); g_searchOv = -1; apply_bars(); do_layout(); settings_save(); return;   /* shown -> hidden, hidden -> shown (and remembered) */
-    case ID_M_SHOWFILTERS: g_set.hideFilters = !g_set.hideFilters; apply_bars(); do_layout(); settings_save(); return;
+    case ID_M_TBLABELS: g_set.tbLabels = !g_set.tbLabels; apply_bars(); do_layout(); save_ui_state(); RedrawWindow(g_main, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW); return;
+    case ID_M_SHOWSTATUS: g_set.hideStatus = !g_set.hideStatus; apply_bars(); do_layout(); save_ui_state(); RedrawWindow(g_main, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW); return;
+    case ID_M_SIZECOLS: size_all_columns(); return;
+    case ID_M_SHOWSEARCH:
+        g_set.hideSearch = SEARCH_SHOWN(); g_searchOv = -1;
+        if (g_set.hideSearch && GetWindowTextLengthW(W.search) > 0) { SetWindowTextW(W.search, L""); refilter(); }   /* a hidden search bar must not keep filtering */
+        apply_bars(); do_layout(); save_ui_state();
+        return;   /* shown -> hidden, hidden -> shown (and remembered) */
+    case ID_M_SHOWFILTERS:
+        g_set.hideFilters = !g_set.hideFilters;
+        if (g_set.hideFilters) {   /* a hidden filter bar must not keep filtering: the lists go back to All */
+            SendMessageW(W.cbHw, CB_SETCURSEL, 0, 0); SendMessageW(W.cbRegion, CB_SETCURSEL, 0, 0); SendMessageW(W.cbMaker, CB_SETCURSEL, 0, 0); SendMessageW(W.cbGenre, CB_SETCURSEL, 0, 0);
+            refilter();
+        }
+        apply_bars(); do_layout(); save_ui_state();
+        return;
     case ID_COL2: return;   /* the Game column always stays */
     case ID_COL0: case ID_COL1: case ID_COL3: case ID_COL4: case ID_COL5: case ID_COL6:   /* show / hide a column of the game list */
         g_set.colsHidden ^= 1 << (id - ID_COL0);
         apply_columns();
-        settings_save();
+        save_ui_state();
         return;
-    case ID_M_OPTWIN: case ID_OPTBTN:   /* F9 / Options > Settings… / the Settings button: show the settings window (only when the options are in it) */
+    case ID_M_OPTWIN:   /* F9 / Options > Settings… / the Settings button: show the settings window (only when the options are in it) */
         if (g_optWin) { set_optmode(1, 0); show_settings(PG_SYSTEM); }   /* always the General tab */
+        return;
+    case IDOK: case IDCANCEL:   /* Enter / Esc in the settings window of its own: OK / Cancel (the tabs of the main window keep their keys) */
+        if (g_optWin && g_opt && IsWindowVisible(g_opt) && GetForegroundWindow() == g_opt) on_command(id == IDOK ? ID_SAVEBTN : ID_CANCELBTN, BN_CLICKED, NULL);
         return;
     case ID_SAVEBTN:   /* OK: save; a settings window of its own closes */
         if (do_save()) set_note(L"Settings saved");
@@ -2081,7 +2182,7 @@ static void on_command(int id, int code, HWND src) {
         int want = g_optWin ? 0 : 1;   /* in a window of their own now: back to classic; else: to a window of their own */
         ctl_set_checked(W.chClassic, !want);
         g_set.optWindow = want;
-        settings_save();
+        save_ui_state();
         PostMessageW(g_main, WM_APP_LAYOUT, (WPARAM)want, 0);
         return;
     }
@@ -2128,20 +2229,25 @@ static void on_command(int id, int code, HWND src) {
         apply_bars(); do_layout();
         SetFocus(W.lv);
         return;
-    case ID_FAVONLY: if (code == BN_CLICKED) { g_set.favOnly = ctl_checked(W.favOnly); tb_set_checked(W.tbFav, g_set.favOnly); refilter(); } return;
+    case ID_TBFAV: case ID_M_FAVONLY:   /* Favorites Only: toggled directly (the check box behind it is hidden) */
+        ctl_set_checked(W.favOnly, !ctl_checked(W.favOnly));
+        g_set.favOnly = ctl_checked(W.favOnly);
+        tb_set_checked(W.tbFav, g_set.favOnly);
+        refilter();
+        return;
     case ID_TBAVAIL: case ID_M_AVAIL:   /* List Only Available ROMs: toggled directly (a click message does not reach the check box when its window is hidden) */
         ctl_set_checked(W.chAvail, !ctl_checked(W.chAvail));
         g_set.onlyAvail = ctl_checked(W.chAvail);
         refilter();
-        settings_save();
+        save_ui_state();
         return;
     case ID_TBAUDIO: show_settings(PG_AUDIO); return;
     case ID_TBFS: {   /* the toolbar switch: the Fullscreen setting (the check box of the Video tab) on / off, saved at once */
         ctl_set_checked(W.chFull, !ctl_checked(W.chFull));
         tb_set_checked(W.tbFs, ctl_checked(W.chFull));
         g_set.fullscreen = ctl_checked(W.chFull);
-        settings_save();
-        snap_take();   /* saved at once: Cancel must not undo it */
+        g_snap.fullscreen = g_set.fullscreen;   /* saved at once: Cancel must not undo it (the other unconfirmed edits stay unconfirmed) */
+        save_ui_state();
         update_state();
         set_note(ctl_checked(W.chFull) ? L"Fullscreen is on" : L"Fullscreen is off (window)");
         return;
@@ -2150,12 +2256,10 @@ static void on_command(int id, int code, HWND src) {
     case ID_V_MODE: case ID_A_MODE: if (code == CBN_SELCHANGE) update_state(); return;
     case ID_V_GLSL: case ID_V_FX: case ID_V_HLSL: if (code == BN_CLICKED) update_state(); return;
     case ID_V_HLSLSET: hlsl_dialog(ui_owner(g_main)); return;
-    case ID_X_MOREOPTS: more_options_dialog(ui_owner(g_main)); return;
+    case ID_X_MOREOPTS: mo_gather_widgets(); more_options_dialog(ui_owner(g_main)); mo_apply_widgets(); return;   /* the boxes of the tabs show the new values (else the timer would write the old ones back) */
     case ID_C_JOY: if (code == BN_CLICKED) update_state(); return;
-    case ID_TBFAV: SendMessageW(W.favOnly, BM_CLICK, 0, 0); return;   /* the toolbar switch clicks the hidden check box: one place for the logic */
     case ID_TBSET: show_settings(PG_SYSTEM); return;
     case ID_TBVIDEO: show_settings(PG_VIDEO); return;
-    case ID_M_SETAUDIO: show_settings(PG_AUDIO); return;
     case ID_TBCTL: show_settings(PG_CONTROLS); return;
     case ID_TBCMB: show_settings(PG_COMBOS); return;
     case ID_ICONBTN: desktop_icon(); return;
@@ -2175,14 +2279,14 @@ static void on_command(int id, int code, HWND src) {
     }
     case ID_C_BDEF: {
         int r = 0;
-        msg_box(g_main, L"Reset Mapping", L"Give all the actions of the list back to the default keys and pad buttons?\n\nThe changes are written when you press OK.", MB_YESNO | MB_ICONQUESTION, &r);
+        msg_box(ui_owner(g_main), L"Reset Mapping", L"Give all the actions of the list back to the default keys and pad buttons?\n\nThe changes are written when you press OK.", MB_YESNO | MB_ICONQUESTION, &r);
         if (r == IDYES) { bind_reset_all(); bind_fill(); }
         return;
     }
     case ID_RESETSORT:   /* all filters back to "All" and the list back to its normal order */
         SendMessageW(W.cbRegion, CB_SETCURSEL, 0, 0); SendMessageW(W.cbMaker, CB_SETCURSEL, 0, 0); SendMessageW(W.cbGenre, CB_SETCURSEL, 0, 0); SendMessageW(W.cbHw, CB_SETCURSEL, 0, 0);
-        g_sortCol = 1; g_sortAsc = 1; refilter(); settings_save(); return;
-    case ID_F_REGION: case ID_F_MAKER: case ID_F_GENRE: case ID_F_HW: if (code == CBN_SELCHANGE) { refilter(); settings_save(); } return;
+        g_sortCol = 1; g_sortAsc = 1; refilter(); save_ui_state(); return;
+    case ID_F_REGION: case ID_F_MAKER: case ID_F_GENRE: case ID_F_HW: if (code == CBN_SELCHANGE) { refilter(); save_ui_state(); } return;
     case ID_S_ROMS: case ID_S_BIOS: if (code == EN_KILLFOCUS) refilter(); return;
     case ID_S_BIOSBROWSE: browse_bios(); return;
     case ID_S_BIOSCLEAR: SetWindowTextW(W.eBios, L""); refilter(); return;
@@ -2196,7 +2300,7 @@ static LRESULT on_notify(NMHDR *nh) {
     if (nh->idFrom == ID_TAB && nh->code == TCN_SELCHANGE) { select_tab(); return 0; }
     if (nh->code == NM_CUSTOMDRAW && (nh->idFrom == ID_GAMELIST || nh->idFrom == ID_C_LV || nh->idFrom == ID_K_LV))
         return lv_altrows((LPNMLVCUSTOMDRAW)nh);
-    if (nh->idFrom == ID_K_LV) return cmb_notify(nh) ? 0 : 0;
+    if (nh->idFrom == ID_K_LV) { cmb_notify(nh); return 0; }
     if (nh->idFrom == ID_C_LV && nh->code == NM_RCLICK) {   /* a right click on a row: the menu Set / Clear for the key or the pad (or both, on the action) */
         LVHITTESTINFO ht;
         POINT pt, sp;
@@ -2255,6 +2359,7 @@ static LRESULT on_notify(NMHDR *nh) {
                 int on = ((n->uNewState & LVIS_STATEIMAGEMASK) >> 12) == 2;
                 if (n->iItem >= 0 && n->iItem < g_nview) {
                     set_favorite(g_games[g_view[n->iItem]].id, on);
+                    save_ui_state();
                     if (ctl_checked(W.favOnly)) PostMessageW(g_main, WM_APP_REFILTER, 0, 0);   /* the list is rebuilt once this click is done */
                 }
             }
@@ -2266,7 +2371,7 @@ static LRESULT on_notify(NMHDR *nh) {
             if (c == 3) return 0;   /* the Info column is not sorted */
             if (c == g_sortCol) g_sortAsc = !g_sortAsc; else { g_sortCol = c; g_sortAsc = 1; }
             refilter();
-            settings_save();   /* the sort order is remembered at once, whatever way the program is left */
+            save_ui_state();   /* the sort order is remembered at once, whatever way the program is left */
             return 0;
         }
         case NM_DBLCLK: {   /* double-click on a game plays it (not on its check box) */
@@ -2307,16 +2412,12 @@ static LRESULT on_notify(NMHDR *nh) {
             DestroyMenu(pm);
             return 0;
         }
-        case LVN_KEYDOWN:
-            if (((NMLVKEYDOWN *)nh)->wVKey == VK_RETURN) launch_game(selected_game());
-            return 0;
         }
         return 0;
     }
     return 0;
 }
 
-static void remember_opt_rect(void);
 
 static void remember_window(void) {
     WINDOWPLACEMENT wp;
@@ -2325,9 +2426,12 @@ static void remember_window(void) {
     { int k; for (k = 0; k < NCOLS; k++) if (((g_set.colsHidden >> k) & 1) && g_colW[k] > 0) g_set.colsGame[k] = MulDiv(g_colW[k], 96, g_dpi); }   /* a hidden column keeps the width it will come back with */
     g_set.splitX = MulDiv(g_splitX, 96, g_dpi);
     wp.length = sizeof wp;
-    if (GetWindowPlacement(g_main, &wp) && wp.showCmd == SW_SHOWNORMAL) {
-        RECT r;
-        GetWindowRect(g_main, &r);
+    g_set.winMax = IsZoomed(g_main) ? 1 : 0;   /* the window starts maximized again (the normal rectangle below is the one it goes back to) */
+    if (GetWindowPlacement(g_main, &wp)) {   /* the normal rectangle, also while maximized */
+        RECT r = wp.rcNormalPosition;   /* (in work-area coordinates: moved by the taskbar at the top / left) */
+        MONITORINFO mi;
+        mi.cbSize = sizeof mi;
+        if (GetMonitorInfoW(MonitorFromWindow(g_main, MONITOR_DEFAULTTONEAREST), &mi)) OffsetRect(&r, mi.rcWork.left - mi.rcMonitor.left, mi.rcWork.top - mi.rcMonitor.top);
         if (r.right - r.left > 200 && r.bottom - r.top > 200) { g_winRect.x = r.left; g_winRect.y = r.top; g_winRect.w = r.right - r.left; g_winRect.h = r.bottom - r.top; }
     }
 }
@@ -2336,6 +2440,7 @@ static LRESULT CALLBACK main_proc(HWND h, UINT m, WPARAM w, LPARAM l) {
     switch (m) {
     case WM_CREATE:
         g_main = h;
+        SetPropW(h, L"MamexRoot", (HANDLE)(UINT_PTR)g_rootHash);
         create_ui();
         return 0;
     case WM_SIZE:
@@ -2359,6 +2464,12 @@ static LRESULT CALLBACK main_proc(HWND h, UINT m, WPARAM w, LPARAM l) {
     case WM_GETMINMAXINFO: {
         MINMAXINFO *mi = (MINMAXINFO *)l;
         { int minw = g_set.optWindow ? S(640) : S(1000);   /* without the tabs the main window can be narrower */
+          RECT wr, cr;
+          if (!g_set.hideToolbar && GetWindowRect(h, &wr) && GetClientRect(h, &cr)) {   /* the toolbar (with its labels) must fit the window */
+              int need = toolbar_width() + 2 * S(8) + (wr.right - wr.left) - cr.right;
+              if (!g_set.optWindow) need += S(8) + S(300);   /* the tabs beside the list keep at least 300 pixels */
+              if (need > minw) minw = need;
+          }
           mi->ptMinTrackSize.x = minw > GetSystemMetrics(SM_CXSCREEN) ? GetSystemMetrics(SM_CXSCREEN) : minw; }
         mi->ptMinTrackSize.y = S(700) > GetSystemMetrics(SM_CYSCREEN) ? GetSystemMetrics(SM_CYSCREEN) : S(700);
         return 0;
@@ -2368,13 +2479,18 @@ static LRESULT CALLBACK main_proc(HWND h, UINT m, WPARAM w, LPARAM l) {
         HMENU mn = (HMENU)w;
         if (mn == g_viewMenu) CheckMenuItem(g_viewMenu, ID_M_LAY0, MF_BYCOMMAND | (g_optWin ? MF_UNCHECKED : MF_CHECKED));
         if (mn == g_colsMenu) { int k; for (k = 0; k < NCOLS; k++) CheckMenuItem(g_colsMenu, ID_COL0 + k, MF_BYCOMMAND | (((g_set.colsHidden >> k) & 1) ? MF_UNCHECKED : MF_CHECKED)); }
+        if (mn == g_barsMenu) {   /* the check marks of View > Toolbars */
+            CheckMenuItem(g_barsMenu, ID_M_SHOWTOOLBAR, MF_BYCOMMAND | (g_set.hideToolbar ? MF_UNCHECKED : MF_CHECKED));
+            CheckMenuItem(g_barsMenu, ID_M_TBLABELS, MF_BYCOMMAND | (g_set.tbLabels ? MF_CHECKED : MF_UNCHECKED));
+            EnableMenuItem(g_barsMenu, ID_M_TBLABELS, MF_BYCOMMAND | (g_set.hideToolbar ? MF_GRAYED : MF_ENABLED));
+            CheckMenuItem(g_barsMenu, ID_M_SHOWSEARCH, MF_BYCOMMAND | (SEARCH_SHOWN() ? MF_CHECKED : MF_UNCHECKED));
+            CheckMenuItem(g_barsMenu, ID_M_SHOWFILTERS, MF_BYCOMMAND | (g_set.hideFilters ? MF_UNCHECKED : MF_CHECKED));
+            CheckMenuItem(g_barsMenu, ID_M_SHOWSTATUS, MF_BYCOMMAND | (g_set.hideStatus ? MF_UNCHECKED : MF_CHECKED));
+        }
         if (mn == g_viewMenu || mn == g_themeMenu) {   /* the check marks of the View menu */
             CheckMenuRadioItem(g_themeMenu, ID_M_THEME0, ID_M_THEME2, ID_M_THEME0 + g_set.themeMode, MF_BYCOMMAND);
             CheckMenuItem(g_viewMenu, ID_M_FAVONLY, MF_BYCOMMAND | (ctl_checked(W.favOnly) ? MF_CHECKED : MF_UNCHECKED));
             CheckMenuItem(g_viewMenu, ID_M_AVAIL, MF_BYCOMMAND | (ctl_checked(W.chAvail) ? MF_CHECKED : MF_UNCHECKED));
-            CheckMenuItem(g_viewMenu, ID_M_SHOWSEARCH, MF_BYCOMMAND | (SEARCH_SHOWN() ? MF_CHECKED : MF_UNCHECKED));
-            CheckMenuItem(g_viewMenu, ID_M_SHOWTOOLBAR, MF_BYCOMMAND | (g_set.hideToolbar ? MF_UNCHECKED : MF_CHECKED));
-            CheckMenuItem(g_viewMenu, ID_M_SHOWFILTERS, MF_BYCOMMAND | (g_set.hideFilters ? MF_UNCHECKED : MF_CHECKED));
         }
         if (GetMenuState(mn, ID_M_PLAY, MF_BYCOMMAND) != (UINT)-1) {
             int ok = playable(selected_game()) ? MF_ENABLED : MF_GRAYED;
@@ -2406,6 +2522,11 @@ static LRESULT CALLBACK main_proc(HWND h, UINT m, WPARAM w, LPARAM l) {
     case WM_APP_GAMES: {
         FetchResult *r = (FetchResult *)l;
         wchar_t exe[560];
+        if (g_modalDepth > 0) {   /* a dialog holds pointers into the game list: the new list comes in when it is closed */
+            if (g_pendingFetch) { games_free(g_pendingFetch->list, g_pendingFetch->n); free(g_pendingFetch); }
+            g_pendingFetch = r;
+            return 0;
+        }
         games_free(g_games, g_ngames);
         g_games = r->list; g_ngames = r->n;
         games_sort_default(g_games, g_ngames);
@@ -2421,7 +2542,7 @@ static LRESULT CALLBACK main_proc(HWND h, UINT m, WPARAM w, LPARAM l) {
             set_status(t);
             if (!g_mameWarned) {
                 g_mameWarned = 1;
-                msg_box(g_main, L"MAME Not Found", L"mame.exe was not found next to the launcher.\n\nChoose it on the General tab (MAME Program), or copy this launcher into the MAME folder.", MB_ICONINFORMATION, NULL);
+                msg_box(ui_owner(g_main), L"MAME Not Found", L"mame.exe was not found next to the launcher.\n\nChoose it on the General tab (MAME Program), or copy this launcher into the MAME folder.", MB_ICONINFORMATION, NULL);
                 show_settings(PG_SYSTEM);
             }
         }
@@ -2459,7 +2580,7 @@ static LRESULT CALLBACK main_proc(HWND h, UINT m, WPARAM w, LPARAM l) {
                     if (tail[0] && code != 0) {
                         wchar_t *msg = (wchar_t *)malloc((wcslen(tail) + 200) * sizeof(wchar_t));
                         swprintf(msg, wcslen(tail) + 200, L"%ls\n\nMAME said:\n\n%ls", t, tail);
-                        msg_box(g_main, L"MAME Ended", msg, MB_ICONWARNING, NULL);
+                        msg_box(ui_owner(g_main), L"MAME Ended", msg, MB_ICONWARNING, NULL);
                         free(msg);
                     }
                     free(tail);
@@ -2471,6 +2592,7 @@ static LRESULT CALLBACK main_proc(HWND h, UINT m, WPARAM w, LPARAM l) {
         if (w == 1) {
             static int tick;
             sync_main_enable();   /* the main window is off while the settings window is open */
+            if (g_pendingFetch && g_modalDepth == 0) { FetchResult *p = g_pendingFetch; g_pendingFetch = NULL; PostMessageW(g_main, WM_APP_GAMES, 0, (LPARAM)p); }
             if (++tick % 8 == 0 && g_games && !g_applying && roms_refresh(0)) PostMessageW(g_main, WM_APP_REFILTER, 0, 0);   /* now and then: ROMs may be added or removed while the launcher is open */
             update_buttons();
         }
@@ -2533,6 +2655,12 @@ static int on_screen(int x, int y, int w, int h) {
     return x + w > vx + 100 && x < vx + vw - 100 && y + 60 > vy && y < vy + vh - 100;
 }
 
+static BOOL CALLBACK find_same_root(HWND h, LPARAM l) {
+    wchar_t cls[32];
+    if (GetClassNameW(h, cls, 32) && !wcscmp(cls, L"MameExMain") && (unsigned)(UINT_PTR)GetPropW(h, L"MamexRoot") == g_rootHash) { *(HWND *)l = h; return FALSE; }
+    return TRUE;
+}
+
 int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, LPWSTR cmd, int show) {
     wchar_t *slash;
     WNDCLASSEXW wc;
@@ -2541,29 +2669,44 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, LPWSTR cmd, int show) {
     MSG msg;
     int argc, W0, H0, x, y;
     wchar_t **argv;
+    const wchar_t *cliGame = NULL;
+    int cliFs = -1;
     HWND hw;
-    (void)prev; (void)cmd; (void)show;
+    (void)prev; (void)show;
     GetModuleFileNameW(NULL, g_root, 560);
     slash = wcsrchr(g_root, L'\\');
     if (slash) *slash = 0;
-    {   /* the files of the builds that were called ZiNc EX - MAME Edition: moved to the new names once */
-        static const wchar_t *const oldNew[][2] = {{L"zinc-settings.cfg", L"mame-ex-settings.cfg"}, {L"zinc-games.cfg", L"mame-ex-games.cfg"}, {L"zinc-combos.cfg", L"mame-ex-combos.cfg"}};
-        int k;
-        for (k = 0; k < 3; k++) {
-            wchar_t a[560], b[560];
-            path_join(a, 560, g_root, oldNew[k][0]);
-            path_join(b, 560, g_root, oldNew[k][1]);
-            if (file_exists(a) && !file_exists(b)) MoveFileW(a, b);
+    argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+    if (argv && argc > 1) {   /* frontends: MAME-EX.exe --game <set or ROM file> [--fullscreen | --windowed]  (or just the ROM file) */
+        int i;
+        for (i = 1; i < argc; i++) {
+            if (!_wcsicmp(argv[i], L"--fullscreen")) cliFs = 1;
+            else if (!_wcsicmp(argv[i], L"--windowed")) cliFs = 0;
+            else if (!_wcsicmp(argv[i], L"--game") && i + 1 < argc) cliGame = argv[++i];
+            else if (!_wcsnicmp(argv[i], L"--game=", 7)) cliGame = argv[i] + 7;
+            else if (argv[i][0] != L'-' && !cliGame) cliGame = argv[i];
         }
     }
-    {   /* one launcher per folder: a second one would overwrite the settings of the first (it brings the first to the front and ends) */
-        wchar_t name[600] = L"MAME-EX-";
-        size_t k, n = wcslen(name);
-        for (k = 0; g_root[k] && n < 590; k++, n++) name[n] = (g_root[k] == L'\\' || g_root[k] == L':') ? L'_' : (wchar_t)towlower(g_root[k]);
-        name[n] = 0;
-        CreateMutexW(NULL, FALSE, name);
+    if (!cliGame) {   /* one launcher window per folder: a second one would overwrite the settings of the first (it brings the first to the front and ends). The command line runs of frontends are not counted: they may run beside the window and one another */
+        wchar_t name[64];
+        unsigned h32 = 2166136261u;
+        size_t k;
+        HANDLE mx;
+        for (k = 0; g_root[k]; k++) { h32 ^= (unsigned)towlower(g_root[k]); h32 *= 16777619u; }
+        g_rootHash = h32;
+        swprintf(name, 64, L"MAME-EX-%08x", h32);
+        mx = CreateMutexW(NULL, FALSE, name);
+        if (GetLastError() == ERROR_ALREADY_EXISTS && cmd && wcsstr(cmd, L"--restarted")) {   /* a restart (new theme): the launcher that started this one is still closing: wait for it */
+            int tries;
+            for (tries = 0; tries < 100 && GetLastError() == ERROR_ALREADY_EXISTS; tries++) {
+                Sleep(100);
+                CloseHandle(mx);
+                mx = CreateMutexW(NULL, FALSE, name);
+            }
+        }
         if (GetLastError() == ERROR_ALREADY_EXISTS) {
-            HWND other = FindWindowW(L"MameExMain", NULL);
+            HWND other = NULL;
+            EnumWindows(find_same_root, (LPARAM)&other);   /* the window of the launcher of this folder (not one of another folder) */
             if (other) { if (IsIconic(other)) ShowWindow(other, SW_RESTORE); SetForegroundWindow(other); }
             return 0;
         }
@@ -2573,19 +2716,8 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, LPWSTR cmd, int show) {
     settings_defaults(&g_set, NULL);
     settings_load();
     gamecfg_load();
-    argv = CommandLineToArgvW(GetCommandLineW(), &argc);
-    if (argv && argc > 1) {   /* frontends: MAME-EX.exe --game <set or ROM file> [--fullscreen | --windowed]  (or just the ROM file) */
-        const wchar_t *game = NULL;
-        int fs = -1, i;
-        for (i = 1; i < argc; i++) {
-            if (!_wcsicmp(argv[i], L"--fullscreen")) fs = 1;
-            else if (!_wcsicmp(argv[i], L"--windowed")) fs = 0;
-            else if (!_wcsicmp(argv[i], L"--game") && i + 1 < argc) game = argv[++i];
-            else if (!_wcsnicmp(argv[i], L"--game=", 7)) game = argv[i] + 7;
-            else if (argv[i][0] != L'-' && !game) game = argv[i];
-        }
-        if (game) { int rc = run_game_cli(game, fs); LocalFree(argv); return rc; }
-    }
+    if (cliGame) { int rc; g_inst = inst; rc = run_game_cli(cliGame, cliFs); LocalFree(argv); return rc; }
+    if (argv) LocalFree(argv);
     th_init(g_set.dark);
     ui_init(inst);
     load_modes();
@@ -2603,12 +2735,12 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, LPWSTR cmd, int show) {
     wc.lpfnWndProc = page_proc;
     wc.cbWndExtra = DLGWINDOWEXTRA;
     wc.hbrBackground = NULL;
-    wc.lpszClassName = L"ZPage";
+    wc.lpszClassName = L"MameExPage";
     wc.hIcon = wc.hIconSm = NULL;
     RegisterClassExW(&wc);
     wc.lpfnWndProc = opt_proc;   /* the options window */
     wc.hbrBackground = th_face_brush();
-    wc.lpszClassName = L"ZOptions";
+    wc.lpszClassName = L"MameExOptions";
     wc.hIcon = g_icon;
     wc.hIconSm = g_iconSm;
     RegisterClassExW(&wc);
@@ -2632,7 +2764,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, LPWSTR cmd, int show) {
     ac[3].fVirt = FVIRTKEY | FCONTROL; ac[3].key = 'F'; ac[3].cmd = ID_M_FOCUSSEARCH;
     ac[4].fVirt = FVIRTKEY; ac[4].key = VK_F9; ac[4].cmd = ID_M_OPTWIN;
     acc = CreateAcceleratorTableW(ac, 5);
-    ShowWindow(hw, SW_SHOW);
+    ShowWindow(hw, g_set.winMax ? SW_SHOWMAXIMIZED : SW_SHOW);
     do_layout();
     select_tab();
     apply_to_ui();
@@ -2653,7 +2785,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, LPWSTR cmd, int show) {
         for (p = msg.hwnd; p; p = GetParent(p)) {
             wchar_t cls[16];
             GetClassNameW(p, cls, 16);
-            if (!wcscmp(cls, L"ZPage") || !wcscmp(cls, L"MameExMain") || !wcscmp(cls, L"ZOptions")) { dlg = p; break; }
+            if (!wcscmp(cls, L"MameExPage") || !wcscmp(cls, L"MameExMain") || !wcscmp(cls, L"MameExOptions")) { dlg = p; break; }
         }
         if (dlg && IsDialogMessageW(dlg, &msg)) continue;
         TranslateMessage(&msg);

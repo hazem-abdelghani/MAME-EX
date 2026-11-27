@@ -37,8 +37,10 @@ void settings_defaults(Settings *s, const Settings *keep) {
     Settings n;
     memset(&n, 0, sizeof n);
     n.hideConsole = 1;
+    n.maximize = 1;   /* MAME's own default */
     n.hideSearch = 1;   /* the search bar, the filter bar and the classic (tabs in the main window) layout are off at the first start */
     n.hideFilters = 1;
+    n.tbLabels = 1;   /* the toolbar buttons show their names (View > Toolbars > Show Toolbar Labels) */
     n.optWindow = 1;
     n.video = 0;
     n.keepAspect = 1;
@@ -49,11 +51,11 @@ void settings_defaults(Settings *s, const Settings *keep) {
     n.fxScaler = 2;
     n.throttle = 1;
     n.sampleRate = 0;
-    n.latency = 2;
+    n.latency = 0;   /* 0 = leave it to MAME */
     n.joystick = 1;
     n.ovGameCfg = 1;
     n.afRate = 1;
-    n.deadzone = 30;
+    n.deadzone = 15;   /* MAME's own default (0.15) */
     n.saturation = 85;
     n.skipInfo = 0;
     n.sortCol = 1;
@@ -64,11 +66,11 @@ void settings_defaults(Settings *s, const Settings *keep) {
         wcscpy(n.mame, keep->mame);
         wcscpy(n.roms, keep->roms); wcscpy(n.biosDir, keep->biosDir);
         n.onlyAvail = keep->onlyAvail; n.favOnly = keep->favOnly;
-        n.dark = keep->dark; n.themeMode = keep->themeMode;
-        n.hideSearch = keep->hideSearch; n.hideFilters = keep->hideFilters; n.hideToolbar = keep->hideToolbar;
+        n.themeMode = keep->themeMode;
+        n.hideSearch = keep->hideSearch; n.hideFilters = keep->hideFilters; n.hideToolbar = keep->hideToolbar; n.hideStatus = keep->hideStatus; n.tbLabels = keep->tbLabels;
         n.colsHidden = keep->colsHidden; n.optWindow = keep->optWindow;
         n.sortCol = keep->sortCol; n.sortAsc = keep->sortAsc;
-        memcpy(n.colsGame, keep->colsGame, sizeof n.colsGame); n.splitX = keep->splitX;
+        memcpy(n.colsGame, keep->colsGame, sizeof n.colsGame); n.splitX = keep->splitX; n.winMax = keep->winMax;
         wcscpy(n.fRegion, keep->fRegion); wcscpy(n.fMaker, keep->fMaker); wcscpy(n.fGenre, keep->fGenre); wcscpy(n.fHw, keep->fHw);
         il_copy(&n.fav, &keep->fav);
         il_copy(&n.recent, &keep->recent);
@@ -93,14 +95,15 @@ void settings_defaults(Settings *s, const Settings *keep) {
     s->dark = n.themeMode == 2 || (n.themeMode == 0 && system_dark());
 }
 
+#define INI_MAX 96   /* room for the fields of ini_fields (about 60 today; the macros below stop at the end of the array) */
 typedef struct { const char *key; int kind; void *p; int cap; } IniField;   /* kind 0: text, 1: number, 2: flag */
 
 static int ini_fields(IniField *f) {
     Settings *s = &g_set;
     int n = 0;
-#define TXT(k, v) f[n].key = k, f[n].kind = 0, f[n].p = v, f[n].cap = (int)(sizeof v / sizeof(wchar_t)), n++
-#define NUM(k, v) f[n].key = k, f[n].kind = 1, f[n].p = &(v), n++
-#define FLG(k, v) f[n].key = k, f[n].kind = 2, f[n].p = &(v), n++
+#define TXT(k, v) do { if (n < INI_MAX) { f[n].key = k; f[n].kind = 0; f[n].p = v; f[n].cap = (int)(sizeof v / sizeof(wchar_t)); n++; } } while (0)
+#define NUM(k, v) do { if (n < INI_MAX) { f[n].key = k; f[n].kind = 1; f[n].p = &(v); n++; } } while (0)
+#define FLG(k, v) do { if (n < INI_MAX) { f[n].key = k; f[n].kind = 2; f[n].p = &(v); n++; } } while (0)
     TXT("mame_exe", s->mame); TXT("roms_directory", s->roms); TXT("bios_directory", s->biosDir);
     FLG("hide_console", s->hideConsole); NUM("on_game_start", s->onStart); NUM("binding_version", s->bindVer); FLG("logs", s->logs);
     NUM("video", s->video); FLG("fullscreen", s->fullscreen); NUM("res_w", s->resW); NUM("res_h", s->resH); NUM("rotate", s->rotate);
@@ -109,11 +112,11 @@ static int ini_fields(IniField *f) {
     NUM("bgfx_chain", s->chain); NUM("bgfx_backend", s->backend);
     FLG("artwork_crop", s->artCrop); FLG("hlsl_enable", s->hlsl); FLG("gl_glsl", s->glsl); NUM("integer_scale", s->intScale);
     FLG("filter_window", s->fxOn); NUM("filter_scaler", s->fxScaler); FLG("filter_fxaa", s->fxFxaa); NUM("filter_dither", s->fxDither); NUM("gl_glsl_filter", s->glslFilter); TXT("glsl_shader", s->glslShader);
-    NUM("sound", s->sound); NUM("sample_rate", s->sampleRate); NUM("volume", s->volume); NUM("audio_latency", s->latency);
+    NUM("sound", s->sound); NUM("sample_rate", s->sampleRate); NUM("volume", s->volume); NUM("audio_latency_level", s->latency);
     FLG("joystick", s->joystick); NUM("joystick_provider", s->joyProvider); FLG("mouse", s->mouse); FLG("lightgun", s->lightgun);
     NUM("joystick_deadzone", s->deadzone); NUM("joystick_saturation", s->saturation); FLG("joystick_contradictory", s->contradictory); FLG("mapping_overrides_game_cfg", s->ovGameCfg); NUM("autofire_rate", s->afRate); TXT("controller_file", s->ctrlr); TXT("hlsl_options", s->hlslOpts); TXT("more_options", s->moreOpts); TXT("controls_profile", s->profile);
     FLG("skip_gameinfo", s->skipInfo); FLG("skip_warnings", s->skipWarn); FLG("autosave", s->autosave); FLG("cheat", s->cheat); FLG("confirm_quit", s->confirmQuit); TXT("extra_arguments", s->extra);
-    FLG("only_available", s->onlyAvail); FLG("dark_theme", s->dark);
+    FLG("only_available", s->onlyAvail);
     return n;
 }
 
@@ -147,7 +150,7 @@ static int clampi(int v, int lo, int hi) { return v < lo ? lo : v > hi ? hi : v;
 
 void settings_load(void) {
     char *txt = read_file(g_settingsFile, NULL), *line, *save = NULL;
-    IniField f[64];
+    IniField f[INI_MAX];
     int nf = ini_fields(f), i, haveFav = 0, haveRecent = 0;
     char favs[4096] = "", recents[512] = "";
     int wx = 0, wy = 0, ww = 0, wh = 0;
@@ -172,6 +175,8 @@ void settings_load(void) {
         else if (!strcmp(key, "search_bar")) g_set.hideSearch = !strcmp(val, "0");
         else if (!strcmp(key, "filters_bar")) g_set.hideFilters = !strcmp(val, "0");
         else if (!strcmp(key, "toolbar")) g_set.hideToolbar = !strcmp(val, "0");
+        else if (!strcmp(key, "status_bar")) g_set.hideStatus = !strcmp(val, "0");
+        else if (!strcmp(key, "toolbar_labels")) g_set.tbLabels = strcmp(val, "0") != 0;
         else if (!strcmp(key, "favorites_only")) g_set.favOnly = !strcmp(val, "1");
         else if (!strcmp(key, "filter_region")) { wchar_t *w = u8_to_w(val, -1); wcsncpy(g_set.fRegion, w, 7); free(w); }
         else if (!strcmp(key, "filter_maker")) { wchar_t *w = u8_to_w(val, -1); wcsncpy(g_set.fMaker, w, 39); free(w); }
@@ -183,6 +188,7 @@ void settings_load(void) {
         else if (!strcmp(key, "splitter")) xatoi(val, &g_set.splitX);
         else if (!strcmp(key, "columns_hidden")) xatoi(val, &g_set.colsHidden);
         else if (!strcmp(key, "window_x")) xatoi(val, &wx);
+        else if (!strcmp(key, "window_max")) g_set.winMax = strcmp(val, "0") != 0;
         else if (!strcmp(key, "window_y")) xatoi(val, &wy);
         else if (!strcmp(key, "window_w")) xatoi(val, &ww);
         else if (!strcmp(key, "window_h")) xatoi(val, &wh);
@@ -218,8 +224,12 @@ void settings_load(void) {
     g_set.fxDither = clampi(g_set.fxDither, 0, 3);
     g_set.frameskip = clampi(g_set.frameskip, -1, 10);
     g_set.volume = clampi(g_set.volume, -32, 0);
-    g_set.latency = clampi(g_set.latency, 1, 5);
+    g_set.latency = clampi(g_set.latency, 0, 5);
     g_set.deadzone = clampi(g_set.deadzone, 0, 100);
+    g_set.afRate = clampi(g_set.afRate, 0, 3);
+    g_set.resW = clampi(g_set.resW, 0, 16384); g_set.resH = clampi(g_set.resH, 0, 16384);
+    if (g_set.resW <= 0 || g_set.resH <= 0) g_set.resW = g_set.resH = 0;   /* both or none (MAME rejects 800x0) */
+    { int k, ok = 0; for (k = 0; k < 5; k++) if (kSampleRates[k] == g_set.sampleRate) ok = 1; if (!ok) g_set.sampleRate = 0; }   /* the value is the rate itself (0 = MAME's default) */
     g_set.saturation = clampi(g_set.saturation, 0, 100);
 }
 
@@ -232,15 +242,16 @@ static void add_list(Buf *b, const char *name, const IntList *l) {
 
 int settings_save(void) {
     Buf b = {0};
-    IniField f[64];
+    IniField f[INI_MAX];
     int nf = ini_fields(f), i, ok;
-    buf_add(&b, "; MAME EX settings (written by mame-ex; safe to edit by hand)\r\n[MAME-EX]\r\nsettings_version=1\r\n");
+    buf_add(&b, "; MAME EX settings (written by mame-ex; safe to edit by hand)\r\n[MAME-EX]\r\n");
     for (i = 0; i < nf; i++) {
         if (f[i].kind == 0) { char *u = w_to_u8((wchar_t *)f[i].p); buf_fmt(&b, "%s=%s\r\n", f[i].key, u); free(u); }
         else buf_fmt(&b, "%s=%d\r\n", f[i].key, f[i].kind == 2 ? *(int *)f[i].p != 0 : *(int *)f[i].p);
     }
+    buf_fmt(&b, "window_max=%d\r\n", g_set.winMax != 0);
     if (g_winRect.w > 0) buf_fmt(&b, "window_x=%d\r\nwindow_y=%d\r\nwindow_w=%d\r\nwindow_h=%d\r\n", g_winRect.x, g_winRect.y, g_winRect.w, g_winRect.h);
-    buf_fmt(&b, "options_window=%d\r\ntheme_mode=%d\r\nsearch_bar=%d\r\nfilters_bar=%d\r\ntoolbar=%d\r\n", g_set.optWindow != 0, g_set.themeMode, !g_set.hideSearch, !g_set.hideFilters, !g_set.hideToolbar);
+    buf_fmt(&b, "options_window=%d\r\ntheme_mode=%d\r\nsearch_bar=%d\r\nfilters_bar=%d\r\ntoolbar=%d\r\nstatus_bar=%d\r\ntoolbar_labels=%d\r\n", g_set.optWindow != 0, g_set.themeMode, !g_set.hideSearch, !g_set.hideFilters, !g_set.hideToolbar, !g_set.hideStatus, g_set.tbLabels != 0);
     if (g_optRect.w > 0) buf_fmt(&b, "optwin_x=%d\r\noptwin_y=%d\r\noptwin_w=%d\r\noptwin_h=%d\r\n", g_optRect.x, g_optRect.y, g_optRect.w, g_optRect.h);
     buf_fmt(&b, "favorites_only=%d\r\nsort_column=%d\r\nsort_ascending=%d\r\n", g_set.favOnly != 0, g_set.sortCol, g_set.sortAsc != 0);
     { char *u;
@@ -258,18 +269,7 @@ int settings_save(void) {
     return ok;
 }
 
-void settings_sig(Buf *b) {
-    IniField f[64];
-    int nf = ini_fields(f), i;
-    for (i = 0; i < nf; i++) {
-        if (!strcmp(f[i].key, "dark_theme")) continue;   /* the theme is chosen in the View menu and saved at once */
-        if (f[i].kind == 0) { char *u = w_to_u8((wchar_t *)f[i].p); buf_fmt(b, "%s;", u); free(u); }
-        else buf_fmt(b, "%d;", *(int *)f[i].p);
-    }
-}
-
 void set_favorite(int id, int on) {
     il_remove(&g_set.fav, id);
-    if (on) il_add(&g_set.fav, id);
-    settings_save();
+    if (on) il_add(&g_set.fav, id);   /* the caller saves (save_ui_state: the unconfirmed edits of the tabs stay out of the file) */
 }

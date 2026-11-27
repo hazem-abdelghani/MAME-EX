@@ -71,7 +71,7 @@ for f in FILES[3:]:
             group = lit(desc).replace('OPTIONS', '').strip().title().replace('Osd ', 'OSD ').replace('Hlsl', 'HLSL').replace('Ntsc', 'NTSC')
             continue
         if nm == 'nullptr': continue
-        name = lit(nm + ((' "' + alias + '"') if False else '')) if nm != 'nullptr' else None
+        name = lit(nm) if nm != 'nullptr' else None
         if not name: continue
         rng = re.search(r'\(([-0-9.]+)-([-0-9.]+)\)', alias or '')
         d = lit(dflt)

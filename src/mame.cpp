@@ -17,7 +17,7 @@ static void arg_addf(ArgList *l, const wchar_t *fmt, ...) {
 static void arg_flag(ArgList *l, const wchar_t *name, int on) { arg_addf(l, on ? L"-%ls" : L"-no%ls", name); }   /* -window / -nowindow */
 
 /* one argument the way the C runtime of Windows reads it back: quoted when it has blanks, quotes inside it escaped */
-static std::wstring quote_arg(const wchar_t *a) {
+std::wstring quote_arg(const wchar_t *a) {
     std::wstring out;
     size_t i, n = wcslen(a);
     if (n && !wcspbrk(a, L" \t\"")) return a;
@@ -33,7 +33,7 @@ static std::wstring quote_arg(const wchar_t *a) {
     return out;
 }
 
-wchar_t *args_join(const ArgList *a) {
+static wchar_t *args_join(const ArgList *a) {
     std::wstring s;
     int i;
     for (i = 0; i < a->n; i++) { if (i) s += L' '; s += quote_arg(a->a[i]); }
@@ -49,9 +49,6 @@ wchar_t *command_line_join(const wchar_t *exe, const ArgList *a) {
 }
 
 /* ---------------------------------------------------------------- where MAME is */
-static void abs_path(const wchar_t *p, wchar_t *out, size_t cap) {
-    if (is_abs_path(p)) { wcsncpy(out, p, cap - 1); out[cap - 1] = 0; } else path_join(out, cap, g_root, p);
-}
 
 int mame_exe(wchar_t *out, size_t cap) {
     static const wchar_t *const cand[] = {L"mame.exe", L"mame\\mame.exe", L"mame64.exe", L"mame\\mame64.exe"};
@@ -94,10 +91,10 @@ int mame_ctrlr_names(wchar_t names[][64], int max) {
     if (h == INVALID_HANDLE_VALUE) return 0;
     do {
         size_t l = wcslen(fd.cFileName);
-        if ((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || l < 5 || n >= max) continue;
-        wcsncpy(names[n], fd.cFileName, 63);
-        names[n][63] = 0;
-        names[n][wcslen(names[n]) - 4] = 0;   /* MAME wants the name without .cfg */
+        if ((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || l < 5 || l > 67 || n >= max) continue;   /* (a name longer than the list holds is left out, not cut) */
+        if (_wcsicmp(fd.cFileName + l - 4, L".cfg")) continue;   /* the pattern *.cfg also matches short names like x.cfgbak */
+        wcsncpy(names[n], fd.cFileName, l - 4);
+        names[n][l - 4] = 0;   /* MAME wants the name without .cfg */
         n++;
     } while (FindNextFileW(h, &fd));
     FindClose(h);
@@ -145,6 +142,32 @@ static void add_words(ArgList *a, const wchar_t *text) {
     LocalFree(w);
 }
 
+/* the -rompath value of a start: the ROMs folders (and the BIOS folder) as full paths, as the launcher looks for the sets ("" = MAME's own settings) */
+void mame_rompath(wchar_t *out, size_t cap) {
+    std::wstring rp;
+    out[0] = 0;
+    if (g_set.roms[0] || g_set.biosDir[0]) {
+        wchar_t *copy = wdup(g_set.roms), *tok, *save = NULL, full[600];
+        for (tok = wcstok_s(copy, L";", &save); tok; tok = wcstok_s(NULL, L";", &save)) {
+            trim_w(tok);
+            if (!tok[0]) continue;
+            abs_path(tok, full, 600);
+            if (!rp.empty()) rp += L';';
+            rp += full;
+        }
+        free(copy);
+        if (g_set.biosDir[0]) {   /* the BIOS sets are looked for there too (the roms folder stays first: without a ROMs setting it is the roms folder of MAME) */
+            if (rp.empty()) { roms_dir_abs(full, 600); rp = full; }
+            abs_path(g_set.biosDir, full, 600);
+            rp += L';';
+            rp += full;
+        }
+    }
+    wcsncpy(out, rp.c_str(), cap - 1);
+    out[cap - 1] = 0;
+}
+
+static int g_cliRun;   /* run_game_cli: the launcher window does not exist (and does not close) */
 static int g_afPlugin;   /* the combos / autofire plugin is part of the command line of the last mame_args */
 void mame_args(int id, const PlayOpts *po, ArgList *a) {
     Eff e;
@@ -156,25 +179,7 @@ void mame_args(int id, const PlayOpts *po, ArgList *a) {
     effective(id, po, &e, &gc);
     arg_add(a, g ? g->set : L"");
     if (gc && gc->bios[0]) { arg_add(a, L"-bios"); arg_add(a, gc->bios); }   /* the BIOS chosen for this game */
-    if (g_set.roms[0] || g_set.biosDir[0]) {   /* the ROMs folders (and the BIOS folder) as full paths: the launcher's folder is not the working directory of MAME */
-        std::wstring rp;
-        wchar_t *copy = wdup(g_set.roms), *tok, *save = NULL, full[600];
-        for (tok = wcstok_s(copy, L";", &save); tok; tok = wcstok_s(NULL, L";", &save)) {
-            trim_w(tok);
-            if (!tok[0]) continue;
-            abs_path(tok, full, 600);
-            if (!rp.empty()) rp += L';';
-            rp += full;
-        }
-        free(copy);
-        if (g_set.biosDir[0]) {   /* the BIOS sets are looked for there too (the roms folder stays first: without a ROMs setting it is MAME's own roms folder) */
-            if (rp.empty()) { roms_dir_abs(full, 600); rp = full; }
-            abs_path(g_set.biosDir, full, 600);
-            rp += L';';
-            rp += full;
-        }
-        if (!rp.empty()) { arg_add(a, L"-rompath"); arg_add(a, rp.c_str()); }
-    }
+    { wchar_t rp[1200]; mame_rompath(rp, 1200); if (rp[0]) { arg_add(a, L"-rompath"); arg_add(a, rp); } }
     /* video */
     if (e.video > 0) { arg_add(a, L"-video"); arg_addf(a, L"%hs", kVideoArgs[e.video]); }
     arg_flag(a, L"window", !e.fullscreen);
@@ -213,14 +218,14 @@ void mame_args(int id, const PlayOpts *po, ArgList *a) {
     if (e.sound > 0) { arg_add(a, L"-sound"); arg_addf(a, L"%hs", kSoundArgs[e.sound]); }
     if (g_set.sampleRate > 0) { arg_add(a, L"-samplerate"); arg_addf(a, L"%d", g_set.sampleRate); }
     if (e.volume != 0) { arg_add(a, L"-volume"); arg_addf(a, L"%d", e.volume); }
-    if (g_set.latency != 2) { arg_add(a, L"-audio_latency"); arg_addf(a, L"%d", g_set.latency); }
+    if (g_set.latency > 0) { arg_add(a, L"-audio_latency"); arg_addf(a, L"%d", g_set.latency); }   /* 0 = MAME's own default (0.0 = decided by the audio module) */
     /* controls */
     arg_flag(a, L"joystick", g_set.joystick);
     if (g_set.joyProvider > 0) { arg_add(a, L"-joystickprovider"); arg_addf(a, L"%hs", kProviderArgs[g_set.joyProvider]); }
     arg_flag(a, L"mouse", g_set.mouse);
     arg_flag(a, L"lightgun", g_set.lightgun);
     arg_flag(a, L"joystick_contradictory", g_set.contradictory);
-    if (g_set.deadzone != 30) { arg_add(a, L"-joystick_deadzone"); arg_addf(a, L"%d.%02d", g_set.deadzone / 100, g_set.deadzone % 100); }
+    if (g_set.deadzone != 15) {   /* MAME's default is 0.15 */ arg_add(a, L"-joystick_deadzone"); arg_addf(a, L"%d.%02d", g_set.deadzone / 100, g_set.deadzone % 100); }
     if (g_set.saturation != 85) { arg_add(a, L"-joystick_saturation"); arg_addf(a, L"%d.%02d", g_set.saturation / 100, g_set.saturation % 100); }
     if (g_set.ctrlr[0]) { arg_add(a, L"-ctrlr"); arg_add(a, g_set.ctrlr); }
     /* the rest */
@@ -235,23 +240,22 @@ void mame_args(int id, const PlayOpts *po, ArgList *a) {
     if (g_set.skipWarn && !(po && po->noFilter)) { arg_add(a, L"-keyboardprovider"); arg_add(a, L"dinput"); }
     g_afPlugin = 0;
     if (!(po && po->noFilter)) {   /* the plugins of the launcher: the combos, and the input log (mame-ex-input.log). MAME's own plugins stay in the path: its boot.lua is what loads ours */
-        wchar_t pp[560], dd[560], both[1700];
+        wchar_t pp[560], dd[560];
         std::wstring names, paths = L"plugins";
         if ((g_afPlugin = combos_plugin_prepare(pp, 560)) != 0) { paths += L";"; paths += pp; names += L"mamex_combos"; }
         if (g_set.logs && diag_plugin_prepare(dd, 560)) { paths += L";"; paths += dd; if (!names.empty()) names += L","; names += L"mamex_diag"; }
         if (!names.empty()) {
-            swprintf(both, 1700, L"%ls", paths.c_str());
-            arg_add(a, L"-plugins"); arg_add(a, L"-pluginspath"); arg_add(a, both); arg_add(a, L"-plugin"); arg_add(a, names.c_str());
+            arg_add(a, L"-plugins"); arg_add(a, L"-pluginspath"); arg_add(a, paths.c_str()); arg_add(a, L"-plugin"); arg_add(a, names.c_str());
         }
     }
-    if (g_set.fxOn && !(po && po->noFilter)) {   /* the filter window shows the picture: MAME gets a plain window of the picture size, unscaled and unfiltered (the later words win) */
+    if (g_set.fxOn && (g_cliRun || g_set.onStart != 2) && !(po && po->noFilter)) {   /* (Close The Launcher ends the filter window with the launcher: then MAME keeps its own window) the filter window shows the picture: MAME gets a plain window of the picture size, unscaled and unfiltered (the later words win) */
         static const wchar_t *const fx[] = {L"-window", L"-nomaximize", L"-nokeepaspect", L"-nofilter", L"-prescale", L"1", L"-intscalex", L"0", L"-intscaley", L"0", L"-resolution", L"auto"};
         size_t k;
         for (k = 0; k < sizeof fx / sizeof fx[0]; k++) arg_add(a, fx[k]);
     }
 }
 
-/* the probe run of padprobe.cpp: the game pong without video and sound for one second, with the probe plugin (MAME's own plugins stay in the path: its boot.lua loads ours) */
+/* the probe run of padprobe.cpp: the game pong without video and sound for two seconds, with the probe plugin (MAME's own plugins stay in the path: its boot.lua loads ours) */
 void mame_probe_args(ArgList *a, const wchar_t *pluginDir) {
     wchar_t pp[1200];
     arg_add(a, L"pong");
@@ -290,7 +294,7 @@ void mame_log_start(const ArgList *a) {
         buf_fmt(&log, "default.cfg: %s %s\r\n", s8, GetFileAttributesExW(f1, GetFileExInfoStandard, &fa) ? "(exists)" : "(missing)");
         free(s8);
         s8 = w_to_u8(f2);
-        buf_fmt(&log, "game cfg: %s %s%s\r\n", s8, GetFileAttributesExW(f2, GetFileExInfoStandard, &fa) ? "(exists: its input settings win over default.cfg)" : "(none)", "");
+        buf_fmt(&log, "game cfg: %s %s\r\n", s8, GetFileAttributesExW(f2, GetFileExInfoStandard, &fa) ? "(exists: its input settings win over default.cfg)" : "(none)");
         free(s8);
     }
     log_path(logp, 560, L"mame-ex-launch.log");
@@ -299,13 +303,13 @@ void mame_log_start(const ArgList *a) {
 }
 
 /* what MAME prints: in mame-ex-output.log with Enable Logs, otherwise in a temporary file (the launcher still shows the message when a game fails) */
+static wchar_t g_outPath[560];   /* where MAME's messages of the last start went */
 static void output_path(wchar_t *out, size_t cap) {
     if (g_set.logs) { log_path(out, cap, L"mame-ex-output.log"); return; }
     { wchar_t tmp[MAX_PATH]; DWORD n = GetTempPathW(MAX_PATH, tmp); if (n && n < MAX_PATH - 30) { path_join(out, cap, tmp, L"mame-ex-output.tmp"); return; } }
     path_join(out, cap, g_root, L"mame-ex-output.tmp");
 }
 
-/* MAME's console messages (a failing video module, a missing file ...) are written to a file, so the launcher can show them when the game ends badly */
 /* Skip Game Warning Screen: MAME has no option for it, the screen only waits for any key. So a key MAME does not use (F13) is sent while the game
    starts. MAME is started with -keyboardprovider dinput for this: DirectInput sees keys that are sent by a program (the default raw input module ignores
    them) and, unlike the win32 provider, still gets Alt+Enter (full screen) and the other Alt keys. */
@@ -337,7 +341,11 @@ void mame_stop(const PROCESS_INFORMATION *pi) {
     StopCtx *c = new StopCtx;
     c->pid = pi->dwProcessId;
     if (!DuplicateHandle(GetCurrentProcess(), pi->hProcess, GetCurrentProcess(), &c->h, 0, FALSE, DUPLICATE_SAME_ACCESS)) { TerminateProcess(pi->hProcess, 0); delete c; return; }
-    CloseHandle(CreateThread(NULL, 0, stop_thread, c, 0, NULL));
+    {   /* (if the thread cannot start: the window is asked once and the handle freed) */
+        HANDLE th = CreateThread(NULL, 0, stop_thread, c, 0, NULL);
+        if (th) CloseHandle(th);
+        else { EnumWindows(stop_close, (LPARAM)c->pid); CloseHandle(c->h); delete c; }
+    }
 }
 
 static DWORD WINAPI warn_thread(LPVOID p) {
@@ -370,6 +378,7 @@ static DWORD WINAPI warn_thread(LPVOID p) {
     return 0;
 }
 
+/* MAME's console messages (a failing video module, a missing file ...) are written to a file, so the launcher can show them when the game ends badly */
 BOOL mame_start(ArgList *a, PROCESS_INFORMATION *pi) {
     bind_autofire_mode(g_afPlugin);   /* the plugin of the last mame_args runs: autofire works; otherwise the buttons get their real codes */
     STARTUPINFOW si;
@@ -383,6 +392,7 @@ BOOL mame_start(ArgList *a, PROCESS_INFORMATION *pi) {
     memset(&si, 0, sizeof si);
     si.cb = sizeof si;
     output_path(outp, 560);
+    wcsncpy(g_outPath, outp, 559); g_outPath[559] = 0;
     f = CreateFileW(outp, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, &sa, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (f != INVALID_HANDLE_VALUE) {
         si.dwFlags = STARTF_USESTDHANDLES;
@@ -400,8 +410,10 @@ wchar_t *mame_output_tail(size_t maxChars) {
     wchar_t outp[560], *w, *start;
     size_t len = 0, n, i, j;
     char *txt;
-    output_path(outp, 560);
+    if (g_outPath[0]) wcsncpy(outp, g_outPath, 559); else output_path(outp, 560);   /* the file of the last start (Enable Logs may have been switched since) */
+    outp[559] = 0;
     txt = read_file(outp, &len);
+    { size_t ol = wcslen(outp); if (ol > 4 && !_wcsicmp(outp + ol - 4, L".tmp")) DeleteFileW(outp); }   /* the temporary file is read once */
     if (!txt) return wdup(L"");
     if (len > 8000) { memmove(txt, txt + len - 8000, 8000); txt[8000] = 0; len = 8000; }
     w = u8_to_w(txt, -1);
@@ -498,7 +510,7 @@ static DWORD WINAPI focus_thread(LPVOID pidp) {
 
 /* "MAME-EX.exe --game <set name or ROM file> [--fullscreen | --windowed]": for frontends (LaunchBox, Pegasus, RetroBat / EmulationStation, Playnite, Steam...).
  * Starts the game with the global and the game's own settings, without the launcher window, waits until the game is closed and then returns.
- * Exit codes: 0 played, 2 unknown game, 3 ROM files missing, 4 MAME could not be started, 5 no game given. Problems are written to mame-ex-launch.log. */
+ * Exit codes: 0 played, 2 unknown game, 3 ROM files missing, 4 MAME could not be started, 5 no game given, 6 MAME ended with an error. Problems are written to mame-ex-launch.log. */
 static void cli_log(const wchar_t *what, const wchar_t *arg) {
     wchar_t logp[560];
     Buf log = {0};
@@ -531,9 +543,11 @@ static const Game *cli_find_game(const wchar_t *arg) {
 }
 
 int run_game_cli(const wchar_t *game, int fullscreen) {   /* fullscreen: -1 as set, 0 window, 1 fullscreen */
+    g_cliRun = 1;
     ArgList a;
     PROCESS_INFORMATION pi;
     PlayOpts po;
+    DWORD code = 0;
     const Game *g;
     wchar_t exe[560];
     if (!game || !game[0]) { cli_log(L"no game given", L""); return 5; }
@@ -563,8 +577,16 @@ int run_game_cli(const wchar_t *game, int fullscreen) {   /* fullscreen: -1 as s
     if (g_set.fxOn) filter_start(pi.dwProcessId);
     WaitForSingleObject(pi.hProcess, INFINITE);
     filter_stop();
+    GetExitCodeProcess(pi.hProcess, &code);
     CloseHandle(pi.hThread);
     CloseHandle(pi.hProcess);
     args_free(&a);
+    if (code != 0) {   /* MAME ended with an error (a set it does not know, an option it rejects ...): the front-end must be able to tell */
+        wchar_t *tail = mame_output_tail(1400), msg[40];
+        swprintf(msg, 40, L"MAME exit code %lu", (unsigned long)code);
+        cli_log(msg, tail);
+        free(tail);
+        return 6;
+    }
     return 0;
 }

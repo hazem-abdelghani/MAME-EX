@@ -15,7 +15,7 @@ static std::string attr(const std::string &tag, const char *name) {
     e = tag.find('"', a);
     if (e == std::string::npos) return "";
     std::string v = tag.substr(a, e - a);
-    for (const char *ent : {"&amp;", "&lt;", "&gt;", "&quot;", "&apos;"}) {
+    for (const char *ent : {"&lt;", "&gt;", "&quot;", "&apos;", "&amp;"}) {   /* &amp; last: "&amp;lt;" is the text "&lt;" */
         const char rep = ent[1] == 'a' && ent[2] == 'm' ? '&' : ent[1] == 'l' ? '<' : ent[1] == 'g' ? '>' : ent[1] == 'q' ? '"' : '\'';
         size_t p;
         while ((p = v.find(ent)) != std::string::npos) v.replace(p, strlen(ent), 1, rep);
@@ -72,6 +72,7 @@ const GameInfo *game_info(const wchar_t *set) {
         }
     }
     buf_free(&out);
+    if (!gi.ok) { static GameInfo failed; failed = gi; return &failed; }   /* not kept: the next call asks MAME again (the path may have been fixed meanwhile) */
     g_info[set] = gi;
     return &g_info[set];
 }
@@ -165,7 +166,7 @@ static std::string with_dips(std::string t, const wchar_t *set, const std::vecto
 }
 
 /* ---------------------------------------------------------------- the DIP Switches window */
-typedef struct { const GameInfo *gi; std::vector<HWND> cb; } DipCtx;
+typedef struct { std::vector<HWND> cb; } DipCtx;
 
 static int dip_ok(Modal *md) {
     DipCtx *c = (DipCtx *)md->user;
@@ -181,12 +182,12 @@ void dlg_dip_switches(HWND owner, const Game *g) {
     char *txt;
     size_t i, k;
     int ch, cw = 520;
+    if (g_running) { msg_box(owner, L"DIP Switches", L"Stop the running game first: MAME writes its cfg file when it ends and would overwrite the change.", MB_ICONINFORMATION, NULL); return; }
     if (!gi->ok || gi->dips.empty()) { msg_box(owner, L"DIP Switches", L"This game has no DIP switches, or MAME did not list them.", MB_ICONINFORMATION, NULL); return; }
     game_cfg_path(g->set, p, 700);
     txt = read_file(p, NULL);
     if (txt) { cfg = txt; free(txt); }
     memset(&md, 0, sizeof md);
-    c.gi = gi;
     md.kind = 6; md.owner = owner; md.user = &c; md.onok = dip_ok;
     wcscpy(md.title, L"DIP Switches");
     ch = 64 + (int)gi->dips.size() * 30 + 50;
@@ -225,6 +226,11 @@ void dlg_dip_switches(HWND owner, const Game *g) {
         }
         SendMessageW(cb, CB_SETCURSEL, sel, 0);
         c.cb.push_back(cb);
+    }
+    if (c.cb.size() < gi->dips.size()) {   /* the window cannot be taller than the screen: the rest is set in MAME itself */
+        wchar_t more[200];
+        swprintf(more, 200, L"%d more switches do not fit here: set them in MAME (Tab > DIP Switches).", (int)(gi->dips.size() - c.cb.size()));
+        mkat(md.dlg, L"STATIC", more, SS_LEFT | SS_NOPREFIX, 12, ch - 34, cw - 210, 28, 0);
     }
     mkat(md.dlg, L"BUTTON", L"OK", BS_DEFPUSHBUTTON | WS_TABSTOP, cw - 190, ch - 36, 80, 26, IDOK);
     mkat(md.dlg, L"BUTTON", L"Cancel", BS_PUSHBUTTON | WS_TABSTOP, cw - 100, ch - 36, 90, 26, IDCANCEL);

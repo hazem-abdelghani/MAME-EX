@@ -10,7 +10,7 @@
 #define _snwprintf swprintf
 #define CreateDirectoryW(a, b) ((void)(a), 0)
 static std::string g_file;
-static bool g_exists;
+static bool g_exists, g_unreadable;   // g_unreadable: the file is there but cannot be read
 static std::string g_af;
 static bool g_afExists;
 wchar_t g_root[560] = L"r";
@@ -22,7 +22,7 @@ char *read_file(const wchar_t *p, size_t *len) {
         if (len) *len = g_af.size();
         return q;
     }
-    if (!g_exists) return nullptr;
+    if (!g_exists || g_unreadable) return nullptr;
     char *r = (char *)malloc(g_file.size() + 1);
     memcpy(r, g_file.data(), g_file.size());
     r[g_file.size()] = 0;
@@ -31,15 +31,18 @@ char *read_file(const wchar_t *p, size_t *len) {
 }
 int write_file(const wchar_t *p, const void *d, size_t n) { if (wcsstr(p, L"autofire")) { g_af.assign((const char *)d, n); g_afExists = true; return 1; } g_file.assign((const char *)d, n); g_exists = true; return 1; }
 void mame_dir(wchar_t *out, size_t cap) { wcsncpy(out, L"m", cap); }
+int mame_exe(wchar_t *out, size_t cap) { wcsncpy(out, L"m\\mame.exe", cap); return 1; }
 void path_join(wchar_t *out, size_t cap, const wchar_t *a, const wchar_t *b) { swprintf(out, cap, L"%ls\\%ls", a, b); }
 int bind_pad_dev(int pl) { return pl; }
 int bind_pad_xinput(int) { return 1; }
 std::string bind_trigger_code(int dev, int right) { return std::to_string(dev) + (right ? "_SLIDER2_NEG_SWITCH" : "_SLIDER1_NEG_SWITCH"); }
+int file_exists(const wchar_t *);
 #include "bind_core.inc"
 static struct { int ovGameCfg; } g_set = {1};
 int padprobe_token(int, const char *, char *, size_t, int *) { return 0; }
 int padprobe_is_xinput(int) { return 1; }
-int file_exists(const wchar_t *) { return 0; }
+int padprobe_device_known(int) { return 1; }
+int file_exists(const wchar_t *) { return g_unreadable ? 1 : 0; }
 #include "bind_migrate.inc"
 
 static int fails;
@@ -136,7 +139,6 @@ int main() {
     memset(g_b, 0, sizeof g_b); g_dirty = 1;
     CHECK(bind_save() && g_file == keep);
 
-    printf(fails ? "%d FAILED\n" : "all tests passed\n", fails);
     { /* profile text round trip */
         std::string t, t2;
         memset(g_b, 0, sizeof g_b);
@@ -193,5 +195,37 @@ int main() {
         CHECK(bind_save() && g_file.find("KEYCODE_4PAD OR JOYCODE_1_BUTTON3") != std::string::npos && g_af.empty());
         { std::string tx; bind_set_autofire(14, 1); bind_to_text(tx); memset(g_b, 0, sizeof g_b); bind_from_text(tx.c_str()); CHECK(bind_get_autofire(14) && !bind_get_autofire(4)); }
     }
+    { /* a start without the plugin writes the real codes back; the autofire flag must survive it, and unconfirmed edits of other rows stay out of the file */
+        memset(g_b, 0, sizeof g_b);
+        g_file.clear(); g_exists = false; g_af.clear(); g_afExists = false;
+        bind_reset_all();
+        bind_set_autofire(4, 1);
+        CHECK(bind_save());
+        strcpy(g_b[6].key, "Q"); g_dirty = 1;   // an edit of another row that is not confirmed
+        CHECK(bind_autofire_mode(0));
+        CHECK(g_file.find("KEYCODE_4PAD OR JOYCODE_1_BUTTON3") != std::string::npos && g_file.find("KEYCODE_Q") == std::string::npos);
+        bind_load();
+        CHECK(bind_get_autofire(4));
+        CHECK(bind_autofire_mode(1) && g_file.find("KEYCODE_4PAD OR JOYCODE_1_BUTTON3") == std::string::npos);
+    }
+    { /* a default.cfg that cannot be read is not replaced by a new one */
+        memset(g_b, 0, sizeof g_b);
+        g_file = "<mameconfig version=\"10\"><system name=\"default\"><input><port type=\"UI_UP\"><newseq type=\"standard\">KEYCODE_UP</newseq></port></input></system></mameconfig>\n";
+        g_exists = true;
+        bind_reset_all();
+        g_unreadable = true;
+        CHECK(!bind_save());
+        g_unreadable = false;
+        CHECK(g_file.find("UI_UP") != std::string::npos && g_file.find("P1_BUTTON1") == std::string::npos);
+        CHECK(bind_save() && g_file.find("UI_UP") != std::string::npos && g_file.find("P1_BUTTON1") != std::string::npos);
+    }
+    { /* AND / NOT sequences of MAME's own menu stay as they are (checked above); codes with markup characters are not written as markup */
+        memset(g_b, 0, sizeof g_b);
+        g_file.clear(); g_exists = false;
+        bind_reset_all();
+        strcpy(g_b[4].extra, "</newseq></port><evil/>");
+        CHECK(bind_save() && g_file.find("<evil/>") == std::string::npos);
+    }
+    printf(fails ? "%d FAILED\n" : "all tests passed\n", fails);
     return fails != 0;
 }

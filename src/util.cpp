@@ -1,5 +1,4 @@
 #include "common.h"
-#include <stdarg.h>
 
 /* ---- integer lists ---- */
 void il_clear(IntList *l) { free(l->v); l->v = NULL; l->n = l->cap = 0; }
@@ -55,7 +54,7 @@ char *lua_path_u8(const wchar_t *p) {
     if (!ascii) {
         HANDLE h = CreateFileW(p, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
         if (h != INVALID_HANDLE_VALUE) CloseHandle(h);
-        if (GetShortPathNameW(p, sp, 600) > 0 && sp[0]) p = sp;
+        { DWORD sl = GetShortPathNameW(p, sp, 600); if (sl > 0 && sl < 600 && sp[0]) p = sp; }   /* (a longer result means the buffer was too small) */
     }
     u = w_to_u8(p);
     if (u) for (i = 0; u[i]; i++) if (u[i] == '\\') u[i] = '/';
@@ -78,6 +77,8 @@ void plugin_path(wchar_t *out, size_t cap, const wchar_t *name) {
 void buf_free(Buf *b) { free(b->s); b->s = NULL; b->n = b->cap = 0; }
 
 /* ---- strings ---- */
+std::wstring wa(const char *s) { wchar_t *w = u8_to_w(s, -1); std::wstring r = w ? w : L""; free(w); return r; }   /* UTF-8 -> std::wstring */
+std::string ua(const wchar_t *s) { char *u = w_to_u8(s); std::string r = u ? u : ""; free(u); return r; }       /* std::wstring -> UTF-8 */
 wchar_t *wdup(const wchar_t *s) {
     size_t n = wcslen(s) + 1;
     wchar_t *r = (wchar_t *)malloc(n * sizeof(wchar_t));
@@ -126,12 +127,14 @@ int xatoi(const char *s, int *out) {
 /* ---- files ---- */
 char *read_file(const wchar_t *path, size_t *len) {
     HANDLE h = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
-    DWORD sz, got = 0;
+    DWORD got = 0;
+    LARGE_INTEGER sz;
     char *buf;
     if (h == INVALID_HANDLE_VALUE) return NULL;
-    sz = GetFileSize(h, NULL);
-    buf = (char *)malloc((size_t)sz + 1);
-    if (!ReadFile(h, buf, sz, &got, NULL)) got = 0;
+    if (!GetFileSizeEx(h, &sz) || sz.QuadPart < 0 || sz.QuadPart > 0x7FFFFFF0LL) { CloseHandle(h); return NULL; }   /* (a zip of more than 2 GB cannot be read whole) */
+    buf = (char *)malloc((size_t)sz.QuadPart + 1);
+    if (!buf) { CloseHandle(h); return NULL; }
+    if (!ReadFile(h, buf, (DWORD)sz.QuadPart, &got, NULL)) got = 0;
     CloseHandle(h);
     buf[got] = 0;
     if (len) *len = got;
@@ -164,6 +167,10 @@ void path_join(wchar_t *out, size_t cap, const wchar_t *a, const wchar_t *b) {
     wcsncpy(out + n, b, cap - n - 1);
     out[cap - 1] = 0;
 }
+/* a path as a full path: relative ones are taken from the launcher folder */
+void abs_path(const wchar_t *p, wchar_t *out, size_t cap) {
+    if (is_abs_path(p)) { wcsncpy(out, p, cap - 1); out[cap - 1] = 0; } else path_join(out, cap, g_root, p);
+}
 int is_abs_path(const wchar_t *p) {
-    return (iswalpha(p[0]) && p[1] == L':') || (p[0] == L'\\' && p[1] == L'\\') || p[0] == L'\\' || p[0] == L'/';
+    return (iswalpha(p[0]) && p[1] == L':') || p[0] == L'\\' || p[0] == L'/';   /* C:\x, \\server\x, \x and a drive-relative D:x are used as they are */
 }

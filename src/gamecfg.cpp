@@ -15,7 +15,7 @@ static void gc_init(GameCfg *c, int id) {
     c->volume = NOVOL;
 }
 
-int gamecfg_active(const GameCfg *c) {
+static int gamecfg_active(const GameCfg *c) {
     return c && (c->video >= 0 || c->fullscreen >= 0 || c->resW > 0 || c->rotate >= 0 || c->keepAspect >= 0 || c->filter >= 0 || c->waitVsync >= 0 ||
                  c->chain >= 0 || c->sound >= 0 || c->volume != NOVOL || c->cheat >= 0 || c->skipInfo >= 0 || c->autosave >= 0 || c->bios[0] || c->extra[0]);
 }
@@ -34,7 +34,7 @@ static GameCfg *gc_slot(int id) {
     return &g_gc[g_ngc++];
 }
 
-void gamecfg_set(const GameCfg *c) { *gc_slot(c->id) = *c; }
+static void gamecfg_set(const GameCfg *c) { *gc_slot(c->id) = *c; }
 
 void gamecfg_remove(int id) {
     int i;
@@ -133,6 +133,7 @@ typedef struct {
     const GameInfo *info;
     GameCfg cfg;
     int nmodes;
+    int extraBios;   /* index of one more entry in the combo (0 = none): the saved BIOS that this MAME does not list (kept unless another is chosen) */
     int reset;
 } Dlg;
 
@@ -170,8 +171,8 @@ static int dlg_ok(Modal *md) {
     c->skipInfo = untri((int)SendMessageW(d->cb[R_SKIP], CB_GETCURSEL, 0, 0));
     c->autosave = untri((int)SendMessageW(d->cb[R_SAVE], CB_GETCURSEL, 0, 0));
     i = (int)SendMessageW(d->cb[R_BIOS], CB_GETCURSEL, 0, 0);
-    if (d->info) c->bios[0] = 0;   /* without the list of BIOS (MAME did not answer) the combo is disabled: the saved one stays */
-    if (i > 0 && d->info && i - 1 < (int)d->info->bios.size()) { wchar_t *w = u8_to_w(d->info->bios[i - 1].name.c_str(), -1); wcsncpy(c->bios, w, 39); free(w); }
+    if (d->info && d->info->ok && !(d->extraBios && i == d->extraBios)) c->bios[0] = 0;   /* without the list of BIOS (MAME did not answer) the combo is disabled: the saved one stays */
+    if (i > 0 && i != d->extraBios && d->info && d->info->ok && i - 1 < (int)d->info->bios.size()) { wchar_t *w = u8_to_w(d->info->bios[i - 1].name.c_str(), -1); wcsncpy(c->bios, w, 39); free(w); }
     GetWindowTextW(d->eExtra, c->extra, 260);
     trim_w(c->extra);
     return 1;
@@ -287,8 +288,8 @@ int dlg_game_settings(HWND owner, const Game *g) {
     add_row(&md, &d, R_SKIP, 3, 1, L"Skip Game Info Screen", triItems, 3, tri(d.cfg.skipInfo));
     add_row(&md, &d, R_SAVE, 3, 2, L"Auto Save / Restore State", triItems, 3, tri(d.cfg.autosave));
     {   /* the BIOS versions of the game (asked from MAME once per game) */
-        const wchar_t *bi[16];
-        static wchar_t bt[15][80];
+        const wchar_t *bi[42];
+        static wchar_t bt[41][80];
         int nb = 1, sel = 0;
         HCURSOR oc = SetCursor(LoadCursor(NULL, IDC_WAIT));
         d.game = g;
@@ -296,13 +297,18 @@ int dlg_game_settings(HWND owner, const Game *g) {
         SetCursor(oc);
         bi[0] = L"Game Default";
         if (d.info && d.info->ok)
-            for (size_t k = 0; k < d.info->bios.size() && nb < 16; k++) {
+            for (size_t k = 0; k < d.info->bios.size() && nb < 41; k++) {
                 wchar_t *wn = u8_to_w(d.info->bios[k].name.c_str(), -1), *wd = u8_to_w(d.info->bios[k].desc.c_str(), -1);
                 swprintf(bt[nb - 1], 80, L"%ls: %ls", wn, wd);
                 if (!_wcsicmp(wn, d.cfg.bios)) sel = nb;
                 free(wn); free(wd);
                 bi[nb] = bt[nb - 1]; nb++;
             }
+        d.extraBios = 0;
+        if (d.info && d.info->ok && d.cfg.bios[0] && !sel) {   /* a saved BIOS that is not in the list: shown, and kept */
+            swprintf(bt[nb - 1], 80, L"%ls (not listed)", d.cfg.bios);
+            bi[nb] = bt[nb - 1]; sel = nb; d.extraBios = nb; nb++;
+        }
         add_row(&md, &d, R_BIOS, 3, 3, L"BIOS", bi, nb, sel);
         if (nb == 1) EnableWindow(d.cb[R_BIOS], FALSE);
     }

@@ -3,14 +3,13 @@
 #include <string>
 #include <initguid.h>
 #include <shobjidl.h>
-#include <string>
 #include <unordered_map>
 #include <vector>
 
 Game *g_games;
 int g_ngames;
 
-/* ---------------------------------------------------------------- the games: Sony ZN-1, Sony ZN-2, Namco System 11, Namco System 12, SNK Hyper Neo Geo 64 */
+/* ---------------------------------------------------------------- the games: Sony ZN-1 / ZN-2 (and the boards built on them), Namco System 10 / 11 / 12, Konami GV / System 573, Taito G-NET, SNK Hyper Neo Geo 64 */
 /* generated from the MAME sources by tools/gen_gamedb.py */
 static const struct { int id; const wchar_t *set, *parent, *bios, *hw, *title, *maker; int year, flags; } kTable[] = {
 #include "gamedb_data.inc"
@@ -170,8 +169,7 @@ static int cmp_game(const void *a, const void *b) {
 void games_sort_default(Game *g, int n) { qsort(g, n, sizeof(Game), cmp_game); }
 
 /* ---------------------------------------------------------------- which ROM sets exist */
-static std::unordered_set<std::wstring> g_have;   /* the lower case names of the sets (zip / 7z / folder) found
-*/
+static std::unordered_set<std::wstring> g_have;   /* the lower case names of the sets (zip / 7z / folder) found */
 static std::wstring g_biosScan;   /* the BIOS folder (when there is one) */
 void rom_available_bios(const wchar_t *dir) { wchar_t t[560]; wcsncpy(t, dir ? dir : L"", 559); t[559] = 0; trim_w(t); g_biosScan = t; }
 static std::wstring g_haveSig;   /* the folders and their last write times when they were read: a change shows when a file is added or removed */
@@ -179,8 +177,7 @@ static void scan_dir(const wchar_t *dir) {
     wchar_t full[600], pat[640];
     WIN32_FIND_DATAW fd;
     HANDLE h;
-    if (is_abs_path(dir)) wcsncpy(full, dir, 599); else path_join(full, 600, g_root, dir);
-    full[599] = 0;
+    abs_path(dir, full, 600);
     _snwprintf(pat, 640, L"%ls\\*", full);
     h = FindFirstFileW(pat, &fd);
     if (h == INVALID_HANDLE_VALUE) return;
@@ -209,7 +206,7 @@ static std::wstring dirs_signature(const wchar_t *dir) {
         WIN32_FILE_ATTRIBUTE_DATA d;
         trim_w(tok);
         if (!tok[0]) continue;
-        if (is_abs_path(tok)) wcsncpy(full, tok, 599); else path_join(full, 600, g_root, tok);
+        abs_path(tok, full, 600);
         full[599] = 0;
         sig += full;
         if (GetFileAttributesExW(full, GetFileExInfoStandard, &d)) { wchar_t t[40]; swprintf(t, 40, L"|%lx.%lx", (unsigned long)d.ftLastWriteTime.dwHighDateTime, (unsigned long)d.ftLastWriteTime.dwLowDateTime); sig += t; }
@@ -218,7 +215,7 @@ static std::wstring dirs_signature(const wchar_t *dir) {
     free(copy);
     if (!g_biosScan.empty()) {
         WIN32_FILE_ATTRIBUTE_DATA d;
-        if (is_abs_path(g_biosScan.c_str())) wcsncpy(full, g_biosScan.c_str(), 599); else path_join(full, 600, g_root, g_biosScan.c_str());
+        abs_path(g_biosScan.c_str(), full, 600);
         full[599] = 0;
         sig += full;
         if (GetFileAttributesExW(full, GetFileExInfoStandard, &d)) { wchar_t t[40]; swprintf(t, 40, L"|%lx.%lx", (unsigned long)d.ftLastWriteTime.dwHighDateTime, (unsigned long)d.ftLastWriteTime.dwLowDateTime); sig += t; }
@@ -269,10 +266,6 @@ int rom_missing(const Game *g, wchar_t *out, size_t cap) {
     }
     return n;
 }
-void rom_available_done(void) {
-    g_have.clear();
-    g_haveSig.clear();
-}
 
 /* ---------------------------------------------------------------- shortcut names */
 /* "Street Fighter EX Plus (US 970407)" -> "Street Fighter EX Plus (US)": dates, revisions and "Ver. x" are dropped;
@@ -317,8 +310,7 @@ void short_title(const wchar_t *title, int keepVer, wchar_t *out, size_t cap) {
         e = wcschr(q, L')');
         if (!e) continue;
         region[rl] = 0;
-        wcsncpy(name, title, p - title);
-        name[p - title] = 0;
+        { size_t nl = (size_t)(p - title); if (nl > 399) nl = 399; wcsncpy(name, title, nl); name[nl] = 0; }
         trim_w(name);
         if (!keepVer) drop_trailing_ver(name);
         _snwprintf(out, cap, L"%ls (%ls)", name, region);
@@ -356,43 +348,37 @@ void shortcut_name(const Game *g, wchar_t *out, size_t cap) {
 }
 
 /* ---------------------------------------------------------------- desktop icon */
-/* A shortcut on the desktop that starts mame.exe directly with the current settings (fullscreen) and the game's own settings:
-   keyboard and controllers work without the launcher. */
+/* A shortcut on the desktop: it runs the launcher without its window (MAME-EX.exe --game <set> --fullscreen), so the game starts with the settings of that moment:
+   the key / pad mapping, the autofire and combos plugin, the game's own settings. */
 int create_desktop_icon(const Game *g, wchar_t *err, size_t errCap) {
-    wchar_t name[400], desk[MAX_PATH], lnk[800], self[560], exe[560], dir[560], *joined;
-    ArgList a;
+    wchar_t name[400], desk[MAX_PATH], lnk[800], self[560], exe[560], *joined;
+    HRESULT ci;
     int i;
     HRESULT hr;
     IShellLinkW *sl = NULL;
     IPersistFile *pf = NULL;
-    PlayOpts po;
     err[0] = 0;
     if (!mame_exe(exe, 560)) { _snwprintf(err, errCap, L"mame.exe was not found (General tab > MAME Program)"); return 0; }
-    mame_dir(dir, 560);
     shortcut_name(g, name, 400);
     for (i = 0; name[i]; i++) if (wcschr(L"\\/:*?\"<>|", name[i])) { memmove(name + i, name + i + 1, (wcslen(name + i)) * sizeof(wchar_t)); i--; }
-    memset(&po, 0, sizeof po);
-    po.fullscreen = 1;
-    po.noFilter = 1;   /* a shortcut starts MAME alone: no filter window */
-    mame_args(g->id, &po, &a);
-    joined = args_join(&a);
-    args_free(&a);
+    { size_t l = wcslen(name); while (l && (name[l - 1] == L'.' || name[l - 1] == L' ')) name[--l] = 0; if (!l) wcsncpy(name, g->set, 399); name[399] = 0; }   /* a file name never ends with a dot or a blank, and is never empty */
     GetModuleFileNameW(NULL, self, 560);
+    { wchar_t cl[500]; _snwprintf(cl, 500, L"--game \"%ls\" --fullscreen", g->set); cl[499] = 0; joined = wdup(cl); }
     if (FAILED(SHGetFolderPathW(NULL, CSIDL_DESKTOPDIRECTORY, NULL, 0, desk))) { _snwprintf(err, errCap, L"Desktop folder not found"); free(joined); return 0; }
     _snwprintf(lnk, 800, L"%ls\\%ls.lnk", desk, name);
-    CoInitialize(NULL);
+    ci = CoInitialize(NULL);
     hr = CoCreateInstance(CLSID_ShellLink, NULL, CLSCTX_INPROC_SERVER, IID_IShellLinkW, (void **)&sl);
     if (SUCCEEDED(hr)) {
-        sl->SetPath(exe);
+        sl->SetPath(self);
         sl->SetArguments(joined);
-        sl->SetWorkingDirectory(dir);
+        sl->SetWorkingDirectory(g_root);
         sl->SetIconLocation(self, 0);
         sl->SetDescription(g->title);
         hr = sl->QueryInterface(IID_IPersistFile, (void **)&pf);
         if (SUCCEEDED(hr)) { hr = pf->Save(lnk, TRUE); pf->Release(); }
         sl->Release();
     }
-    CoUninitialize();
+    if (SUCCEEDED(ci)) CoUninitialize();
     free(joined);
     if (FAILED(hr)) { _snwprintf(err, errCap, L"Windows could not create the shortcut (error 0x%08lX).", (unsigned long)hr); return 0; }
     return 1;

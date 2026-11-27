@@ -1,6 +1,6 @@
 /* "All MAME Options": every command line option of MAME that the other tabs do not have controls for (core, OSD and Windows options with their description;
    the list comes from the MAME sources: tools/gen_options.py). Only values that differ from MAME's defaults are passed, as command line words kept in
-   Settings.moreOpts ("-bios us -nonvram_save -gamma 1.2"). Options that do not exist in an older MAME make it stop with an error: change only what you need. */
+   Settings.moreOpts ("-nonvram_save -gamma 1.2"). Options that do not exist in an older MAME make it stop with an error: change only what you need. */
 #include "common.h"
 #include <string>
 #include <vector>
@@ -17,8 +17,6 @@ typedef struct {
     HWND lv, search, info;
 } MCtx;
 
-static std::wstring wa(const char *s) { wchar_t *w = u8_to_w(s, -1); std::wstring r = w; free(w); return r; }
-static std::string ua(const wchar_t *s) { char *u = w_to_u8(s); std::string r = u ? u : ""; free(u); return r; }
 
 static void parse_words(const wchar_t *text, MCtx *c) {
     int n = 0, i, k;
@@ -43,22 +41,6 @@ static void parse_words(const wchar_t *text, MCtx *c) {
     LocalFree(w);
 }
 
-/* one word for the command line, in the form CommandLineToArgvW reads back (blanks, quotes and a trailing backslash of a folder) */
-static std::wstring quote_word(const std::wstring &v) {
-    std::wstring o;
-    size_t i, bs;
-    if (!v.empty() && v.find_first_of(L" \t\"") == std::wstring::npos) return v;
-    o = L"\"";
-    for (i = 0, bs = 0; i < v.size(); i++) {
-        if (v[i] == L'\\') { bs++; o += L'\\'; continue; }
-        if (v[i] == L'"') o.append(bs + 1, L'\\');
-        bs = 0;
-        o += v[i];
-    }
-    o.append(bs, L'\\');   /* a trailing backslash must not swallow the closing quote */
-    return o + L"\"";
-}
-
 static std::wstring words_of(const MCtx *c) {   /* only what differs from MAME's defaults */
     std::wstring out;
     for (int i = 0; i < NM; i++) {
@@ -68,7 +50,7 @@ static std::wstring words_of(const MCtx *c) {   /* only what differs from MAME's
         else {
             std::wstring v = wa(c->val[i].c_str());
             if (v.empty()) { out.resize(out.size() > 0 ? out.size() - 1 : 0); continue; }
-            out += L"-" + wa(kM[i].name) + L" " + quote_word(v);
+            out += L"-" + wa(kM[i].name) + L" " + quote_arg(v.c_str());
         }
     }
     return out;
@@ -203,7 +185,7 @@ static int more_ok(Modal *md) {
     return 1;
 }
 
-/* a text box that tells its parent when its text changes (WM_COMMAND EN_CHANGE with the id 1004): the modal window passes ids from 1000 to oncmd */
+/* the All MAME Options window: a search box, the list of the options with their values and defaults, Edit / Reset */
 void more_options_dialog(HWND owner) {
     Modal md;
     MCtx *c = new MCtx();
@@ -254,14 +236,6 @@ std::wstring mo_get(const char *name) {
     parse_words(g_set.moreOpts, &c);
     if (kM[i].kind == 'B') return c.val[i] == "1" ? L"1" : L"0";
     return wa(c.val[i].c_str());
-}
-
-int mo_valid(const char *name, const wchar_t *value) {   /* 1 when the text is acceptable for the option ("" is: the default) */
-    int i = find_opt(name);
-    std::string v = ua(value);
-    if (i < 0) return 0;
-    if (v.empty() || kM[i].kind == 'B') return 1;
-    return valid(kM[i], v);
 }
 
 void mo_set(const char *name, const wchar_t *value) {   /* "" = MAME's default */

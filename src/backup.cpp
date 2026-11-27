@@ -3,13 +3,14 @@
 #include "common.h"
 #include "zipio.h"
 
-static const wchar_t *TOP_FILES[] = {L"mame-ex-settings.cfg", L"mame-ex-games.cfg", L"mame-ex-combos.cfg", NULL};
+static const wchar_t *TOP_FILES[] = {L"mame-ex-settings.cfg", L"mame-ex-games.cfg", L"mame-ex-combos.cfg", L"mame-ex-autofire.cfg", NULL};   /* (autofire: the real codes of the autofire rows, which are NONE in MAME's default.cfg) */
 static const wchar_t *MAME_DIRS[] = {L"cfg", L"nvram", L"sta", L"ini", NULL};   /* folders of the MAME directory */
 
 static void add_file(ZipWriter *z, const wchar_t *base, const wchar_t *rel, const wchar_t *zipPrefix, int *count) {
     wchar_t full[700], zn[760];
     size_t n = 0;
     char *data, *name;
+    if (*count >= ZIP_MAXENT) return;   /* a zip of the backup must stay readable by zip_verify */
     path_join(full, 700, base, rel);
     data = read_file(full, &n);
     if (!data) return;
@@ -58,7 +59,16 @@ int backup_create(const wchar_t *zipPath) {
 /* names a backup may contain: the launcher files and the MAME folders (cfg, nvram, sta, ini under "mame/"); no way out of those folders */
 static int allowed(const char *name) {
     int i;
-    if (strstr(name, "..") || strchr(name, ':') || name[0] == '/' || name[0] == '\\') return 0;
+    {   /* no ".." as a part of the path (a name like foo..cfg is fine) */
+        const char *p;
+        for (p = name; *p; ) {
+            const char *e = p;
+            while (*e && *e != '/' && *e != '\\') e++;
+            if (e - p == 2 && p[0] == '.' && p[1] == '.') return 0;
+            p = *e ? e + 1 : e;
+        }
+    }
+    if (strchr(name, ':') || name[0] == '/' || name[0] == '\\') return 0;
     for (i = 0; TOP_FILES[i]; i++) { char *u = w_to_u8(TOP_FILES[i]); int ok = !strcmp(u, name); free(u); if (ok) return 1; }
     if (!strncmp(name, "profiles/", 9) && name[9] && !strchr(name + 9, '/')) return 1;
     if (strncmp(name, "mame/", 5)) return 0;
@@ -83,10 +93,10 @@ int backup_restore(const wchar_t *zipPath) {
     int n, i, done = 0;
     if (!buf) return -1;
     if (!zip_verify(buf, len, &rep)) { free(buf); return -1; }
-    e = (ZipEntry *)malloc(sizeof(ZipEntry) * 4096);
-    n = e ? zip_entries(buf, len, e, 4096) : -1;
+    e = (ZipEntry *)malloc(sizeof(ZipEntry) * ZIP_MAXENT);
+    n = e ? zip_entries(buf, len, e, ZIP_MAXENT) : -1;
     if (n < 0) { free(e); free(buf); return -1; }
-    if (n > 4096) n = 4096;
+    if (n > ZIP_MAXENT) n = ZIP_MAXENT;
     for (i = 0; i < n; i++) {
         unsigned char *data;
         wchar_t *rel, full[700];

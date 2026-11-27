@@ -3,6 +3,8 @@
 
 **MAME EX** is an unofficial Windows front-end for **[MAME](https://github.com/mamedev/mame)** (not part of MAME, not made by the MAME team). It lists 462 games from the 5th-generation PlayStation-class arcade boards and starts them with MAME.
 
+Based on the **ZiNc EX** launcher by Hazem Abdelghani: <https://github.com/hazem-abdelghani/ZiNc-EX>
+
 - **Boards:** Sony ZN-1 / ZN-2 (including Taito FX-1A / FX-1B, Tecmo TPS and Video System games), Namco System 10 / 11 / 12, Konami GV and System 573, Taito G-NET, SNK Hyper Neo Geo 64
 - **Game list:** search, favorites, region / maker / genre filters, per-game settings (BIOS, DIP switches, video, sound, cheats)
 - **Controls:** key and pad mapping with profiles and an autofire column
@@ -54,7 +56,7 @@ It never edits `mame.ini`: everything is passed to MAME on the command line (so 
 
 **Behaviour notes:** *Stop* asks MAME to close its window (so nvram, cfg and the autosave state are written) and ends it only after 8 seconds without an answer. The ROM sets are read once and again only when a ROMs folder changes (its time stamp), on F5, or when the ROMs folder box changes. Only one launcher runs per folder (a second start brings the first to the front). Window, columns and choices are saved on logoff / shutdown too. Autofire needs the launcher's Lua plugin; when it does not run for a start (the filter is off for the game, or it could not be written) the autofire buttons get their real keys back for that start, without the repeat. Key sequences with several codes (`KEYCODE_LALT KEYCODE_ENTER`, `... NOT ...`) made in MAME's own menu are kept as they are.
 
-*OK* saves the settings; *Cancel*, or closing the settings window or the program with the X of the title bar, drops what was changed on the tabs and was not confirmed with *OK*.
+*OK* saves the settings; *Cancel*, or closing the settings window or the program with the X of the title bar, drops what was changed on the tabs and was not confirmed with *OK*. Switches that apply at once (List Only Available ROMs, the View menu, the toolbar buttons, Fullscreen on the toolbar) are saved when you use them. *Restore Defaults* also resets HLSL Settings, Display, Capture And Speed and All MAME Options; it keeps the MAME program, the ROMs and BIOS folders, favorites, window layout, Controls and Combos.
 
 The pad capture asks MAME what it calls the controls of your pad: the first time it runs MAME for a second (hidden, the game pong, `-video none`, with a tiny Lua plugin) and keeps the answer in `mame-ex-padprobe.txt`. So A / B / X / Y, the D-pad and LT / RT are written with the codes of *your* MAME version.
 
@@ -66,7 +68,7 @@ With **Enable Logs** (General tab, off by default) every game start also loads a
 
 **HLSL Settings…** (Video tab, with the Direct3D video mode and HLSL ticked): the parameters of MAME's HLSL screen effects (the shaders in MAME's `hlsl` folder: bloom, chroma, scanlines, shadow mask ...): scanlines, shadow mask, screen curvature, bloom, colour, phosphor and NTSC values, with a few presets. Only values that differ from MAME's defaults are passed on the command line.
 
-**All MAME Options…** (General tab): every other command line option of MAME (about 45, only those that matter for these boards: search paths, gamma / brightness / contrast, screenshots, recording, input recording / playback, speed, coin and joystick options, light gun and pedal / paddle devices, priority ...; vector, debugger, network, MIDI, computer-only and OpenGL quirk options are left out) with MAME's own description, a search box and the default of each. The list is generated from the MAME sources by `tools/gen_options.py` (options the launcher already has controls for, and the HLSL ones, are left out). Only values that differ from MAME's defaults are passed, so an option an older MAME does not know only matters when you change it. Options that belong to a single game (for example `-bios` of Hyper Neo Geo 64 or Taito G-NET) are better put in that game's *Extra Arguments* (Game > Game Settings): a BIOS name that another game does not have makes MAME stop.
+**All MAME Options…** (General tab): every other command line option of MAME (about 50, only those that matter for these boards: search paths, gamma / brightness / contrast, screenshots, recording, input recording / playback, speed, coin and joystick options, light gun and pedal / paddle devices, priority ...; vector, debugger, network, MIDI, computer-only and OpenGL quirk options are left out) with MAME's own description, a search box and the default of each. The list is generated from the MAME sources by `tools/gen_options.py` (options the launcher already has controls for, and the HLSL ones, are left out). Only values that differ from MAME's defaults are passed, so an option an older MAME does not know only matters when you change it. Options that belong to a single game (for example `-bios` of Hyper Neo Geo 64 or Taito G-NET) are better put in that game's *Extra Arguments* (Game > Game Settings): a BIOS name that another game does not have makes MAME stop.
 
 **More controls, from the list of options MAME has and the launcher did not:**
 - *Controls tab:* an **Autofire** column for buttons 1-6 of both players (click the cell, or right-click the row) and an **Autofire Speed** box (10 / 15 / 20 / 30 presses per second); **Light Gun Device** and **Light Gun Provider** (`-lightgun_device`, `-lightgunprovider`). Autofire rows are NONE in MAME's `default.cfg`; the launcher's Lua plugin presses the button while the key / pad button of the row is held (the real codes are kept in `mame-ex-autofire.cfg`, and in profiles).
@@ -86,8 +88,8 @@ MAME-EX.exe --game <set name or ROM zip> [--fullscreen | --windowed]
 - `--game` takes the MAME set name (for example `sfex2`) or the path of the ROM zip. The game starts with the global settings and the game's own settings of the launcher.
 - `--fullscreen` / `--windowed` override the video setting for this start.
 - The call waits until MAME is closed, so the front-end knows when the game ends.
-- Exit codes: `0` played, `2` unknown game, `3` ROM files missing, `4` `mame.exe` could not be started, `5` no game given. With **Enable Logs** on, the reason is in `logs\mame-ex-launch.log`.
-- Desktop icons made by the launcher (Game menu) start `mame.exe` directly with the game's settings.
+- Exit codes: `0` played, `2` unknown game, `3` ROM files missing, `4` `mame.exe` could not be started, `5` no game given, `6` MAME ended with an error (its exit code and messages go to the log). With **Enable Logs** on, the reason is in `logs\mame-ex-launch.log`.
+- Desktop icons made by the launcher (Game menu) run `MAME-EX.exe --game <set> --fullscreen`: the game starts with the settings of that moment (mapping, autofire, combos, the game's own settings).
 
 ## Combos
 
@@ -104,16 +106,16 @@ Double-click a cell (or choose a row and press *Set Key…* / *Set Pad…*) and 
 **Profiles:** the *Profile* box above the list holds mappings you saved under a name (`profiles\<name>.cfg` next to the launcher, included in the backup). Choosing one loads it into the list (press *OK* to write it to MAME); *Save* stores the list in the chosen profile, *Save As…* in a new one, *Rename…* and *Delete* manage them. A profile holds the actions you changed, so actions it does not mention go back to MAME's defaults.
 A game's own `cfg\<game>.cfg` (made when you change keys inside MAME with Tab) still wins over it. `tools/test_bindings.cpp` tests the file reading / writing on any host.
 
-## Filter Window (Experimental): xBRZ, FXAA, Dither Smoothing
+## Filter Window: xBRZ, FXAA, Dither Smoothing
 
 MAME has no xBRZ / FXAA, and an internal resolution above the console's own cannot be offered: MAME draws these games with a software GPU at the console's own resolution.
 What the launcher can do is filter the finished picture. With *Video > Filter Window* ticked:
 
 - MAME is started in a plain window of the game's own picture size (no aspect correction, no smoothing; the launcher adds `-window -nomaximize -nokeepaspect -nofilter -prescale 1 -intscalex 0 -intscaley 0 -resolution auto`).
 - A Direct3D 11 window (`filter.cpp`) copies the picture of that window every frame (`PrintWindow`), runs the pixel shaders of the launcher over it – **xBRZ** scaler (or a smooth bicubic / sharp bilinear one for 3D games), **FXAA**, **dither smoothing** – and shows the result over the whole screen: 4:3 with black bars when *Keep Aspect Ratio* is ticked, otherwise stretched.
-- The window is click-through and never active, so keyboard and mouse go to MAME. It is shown only while MAME has the focus. It closes with MAME.
+- The window is click-through and never active, so keyboard and mouse go to MAME. It is shown only while MAME has the focus. It closes with MAME. (With "When A Game Starts = Close The Launcher" the Filter Window is not used: it lives in the launcher.)
 
-Limits: about one frame of extra delay; the picture is copied from the MAME window, so MAME's own fullscreen (Alt+Enter) must not be used; desktop icons start MAME without the filter; it needs Windows 8.1 or newer and a Direct3D 10/11 graphics card. Internal resolution above the console's cannot be offered.
+Limits: about one frame of extra delay; the picture is copied from the MAME window, so MAME's own fullscreen (Alt+Enter) must not be used; desktop icons (they run `MAME-EX.exe --game <set> --fullscreen`) use the Filter Window setting like the launcher; it needs Windows 10 or newer and a Direct3D 10/11 graphics card. Internal resolution above the console's cannot be offered.
 
 ## Building
 
@@ -146,5 +148,7 @@ MAME EX is by Hazem Abdelghani. MAME belongs to the MAME team; this project only
 
 - **Enable Logs** (General tab, off by default) controls every log file of the launcher, all kept in the `logs` folder beside it: `mame-ex-launch.log`, `mame-ex-output.log`, `mame-ex-combos.log`, `mame-ex-input.log`. Off: none is written (MAME's console output goes to a temporary file in the Windows temp folder, only so the launcher can show why a game failed).
 - **BIOS Folder** (General tab, below ROMs Folder): the BIOS zip files can live in a folder of their own. It is added to MAME's `-rompath` and counted by the Status column and Check ROM Set. Empty: the BIOS sets are in the ROMs folder.
-- At the first start the search bar, the filter bar and the classic layout (settings as tabs in the main window) are off; View and Options > Settings switch them on.
+- At the first start the search bar, the filter bar and the classic layout (settings as tabs in the main window) are off; View > Toolbars (Search Bar, Filter Bar), View > Classic Layout and the General tab switch them on.
 - The Lua plugins the launcher writes (combos / autofire, the pad probe, the input log) are in the folder `mame-ex-plugins` beside the launcher, one sub-folder each (`mame-ex-combos-plugin`, `mame-ex-probe-plugin`, `mame-ex-diag-plugin`). They are rewritten when needed and can be deleted at any time.
+- **View menu:** *Toolbars* holds Show Toolbar, Show Toolbar Labels (the name under each toolbar icon, on by default), Show Search Bar, Show Filter Bar and Show Status Bar (on by default). *List Columns* has the columns and *Size All Columns to Fit* (also in the right-click menu of the list header).
+- **Theme:** a new theme is applied by restarting the launcher; the restart prompt starts the new window after the old one has closed.

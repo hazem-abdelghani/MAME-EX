@@ -1,4 +1,4 @@
-/* The optional dark theme (System tab, applied at the next start). Plain Win32 has no dark mode for its controls, so this combines the
+/* The optional dark theme (View > Theme, applied at the next start). Plain Win32 has no dark mode for its controls, so this combines the
    documented parts (colours for static / edit controls, owner-painted tab headers and status bar) with the dark control themes of
    recent Windows 10 / 11 (set per control). Without the option nothing here changes anything. */
 #include "common.h"
@@ -14,9 +14,9 @@ int g_dark;
 #define C_ALT RGB(48, 48, 48)
 #define C_LINE RGB(80, 80, 80)
 #define C_ACCENT RGB(0, 120, 215)
+#define C_BAR RGB(0x27, 0x27, 0x27)   /* the menu bar only (the rest of the window has C_FACE) */
 
 COLORREF th_face(void) { return g_dark ? C_FACE : GetSysColor(COLOR_BTNFACE); }
-COLORREF th_page(void) { return g_dark ? C_PAGE : GetSysColor(COLOR_WINDOW); }
 COLORREF th_text(void) { return g_dark ? C_TEXT : GetSysColor(COLOR_WINDOWTEXT); }
 COLORREF th_gray(void) { return g_dark ? C_GRAY : GetSysColor(COLOR_GRAYTEXT); }
 COLORREF th_alt(void) { return g_dark ? C_ALT : RGB(242, 242, 242); }
@@ -54,7 +54,7 @@ void th_window(HWND h) {
     BOOL on = TRUE;
     if (!g_dark) return;
     if (pAllowWin) pAllowWin(h, TRUE);
-    dw = LoadLibraryW(L"dwmapi.dll");
+    { static HMODULE s_dw; if (!s_dw) s_dw = LoadLibraryW(L"dwmapi.dll"); dw = s_dw; }
     if (!dw) return;
     set = (DwmSetWindowAttribute_t)GetProcAddress(dw, "DwmSetWindowAttribute");
     if (set) { if (FAILED(set(h, 20, &on, sizeof on))) set(h, 19, &on, sizeof on); }
@@ -62,6 +62,37 @@ void th_window(HWND h) {
 
 /* a control: the dark theme of its class */
 static LRESULT CALLBACK header_proc(HWND h, UINT m, WPARAM w, LPARAM l, UINT_PTR id, DWORD_PTR ref);
+
+/* ---- the items of a combo box (owner drawn in the dark theme): the item under the mouse / the chosen one has a gray bar and white text */
+#define C_HILITE RGB(0, 120, 215)   /* the blue of the selection (as in the Windows list boxes) */
+static void combo_draw_item(const DRAWITEMSTRUCT *d) {
+    HDC dc = d->hDC;
+    int sel = (d->itemState & ODS_SELECTED) != 0, dis = (d->itemState & ODS_DISABLED) != 0 || !IsWindowEnabled(d->hwndItem);
+    HBRUSH bg = CreateSolidBrush(sel && !dis ? C_HILITE : C_FIELD);
+    HGDIOBJ of;
+    wchar_t t[300];
+    RECT r = d->rcItem;
+    FillRect(dc, &r, bg);
+    DeleteObject(bg);
+    t[0] = 0;
+    if (d->itemID != (UINT)-1) SendMessageW(d->hwndItem, CB_GETLBTEXT, d->itemID, (LPARAM)t);
+    t[299] = 0;
+    of = SelectObject(dc, g_font);
+    SetBkMode(dc, TRANSPARENT);
+    SetTextColor(dc, dis ? C_GRAY : sel ? RGB(255, 255, 255) : C_TEXT);
+    r.left += S(4);
+    DrawTextW(dc, t, -1, &r, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
+    SelectObject(dc, of);
+}
+static LRESULT CALLBACK combo_parent_proc(HWND h, UINT m, WPARAM w, LPARAM l, UINT_PTR id, DWORD_PTR ref) {
+    (void)ref;
+    if (m == WM_DRAWITEM) {
+        const DRAWITEMSTRUCT *d = (const DRAWITEMSTRUCT *)l;
+        if (d && d->CtlType == ODT_COMBOBOX && (GetWindowLongW(d->hwndItem, GWL_STYLE) & CBS_OWNERDRAWFIXED)) { combo_draw_item(d); return TRUE; }
+    }
+    if (m == WM_NCDESTROY) RemoveWindowSubclass(h, combo_parent_proc, id);
+    return DefSubclassProc(h, m, w, l);
+}
 
 void th_control(HWND h, const wchar_t *cls) {
     const wchar_t *theme = NULL;
@@ -73,6 +104,7 @@ void th_control(HWND h, const wchar_t *cls) {
     if (theme) SetWindowTheme(h, theme, NULL);
     if (!_wcsicmp(cls, L"COMBOBOX")) {   /* the drop-down list of a combo box has a scroll bar of its own */
         COMBOBOXINFO ci;
+        if (GetWindowLongW(h, GWL_STYLE) & CBS_OWNERDRAWFIXED) SetWindowSubclass(GetParent(h), combo_parent_proc, 7, 0);   /* the parent gets WM_DRAWITEM of its combo boxes */
         ci.cbSize = sizeof ci;
         if (GetComboBoxInfo(h, &ci) && ci.hwndList) { if (pAllowWin) pAllowWin(ci.hwndList, TRUE); SetWindowTheme(ci.hwndList, L"DarkMode_Explorer", NULL); }
     }
@@ -234,7 +266,7 @@ static HBRUSH b_bar, b_hot, b_sel;
 LRESULT th_menu_msg(HWND h, UINT m, WPARAM w, LPARAM l, int *handled) {
     *handled = 0;
     if (!g_dark) return 0;
-    if (!b_bar) { b_bar = CreateSolidBrush(C_FACE); b_hot = CreateSolidBrush(RGB(62, 62, 62)); b_sel = CreateSolidBrush(RGB(78, 78, 78)); }
+    if (!b_bar) { b_bar = CreateSolidBrush(C_BAR); b_hot = CreateSolidBrush(RGB(62, 62, 62)); b_sel = CreateSolidBrush(RGB(78, 78, 78)); }
     if (m == WM_UAHDRAWMENU) {
         UAHMENU *um = (UAHMENU *)l;
         MENUBARINFO mbi;
@@ -284,7 +316,7 @@ void th_menu_line(HWND h) {
     RECT rc, rw, line;
     HDC dc;
     if (!g_dark) return;
-    if (!b_bar) b_bar = CreateSolidBrush(C_FACE);
+    if (!b_bar) b_bar = CreateSolidBrush(C_BAR);
     memset(&mbi, 0, sizeof mbi);
     mbi.cbSize = sizeof mbi;
     if (!GetMenuBarInfo(h, OBJID_MENU, 0, &mbi)) return;
